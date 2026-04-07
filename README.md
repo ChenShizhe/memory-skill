@@ -1,0 +1,98 @@
+# memory-skill
+
+Four skills for persistent memory across AI agent sessions. Built as model-agnostic markdown instructions that any LLM agent can follow.
+
+## Skills
+
+| Skill | Purpose | Reads | Writes |
+|-------|---------|-------|--------|
+| **memory-retriever** | Load relevant memory at session start or mid-session | `memories/`, `citadel/` (read-only) | project `memory/` (trace files) |
+| **experience-logger** | Record session outcomes for later ingestion | (none) | `experiences/` |
+| **memory-manager** | Ingest experience logs into searchable long-term memory | `experiences/`, `memories/` | `memories/` |
+| **knowledge-maester** | Ingest papers, reports, and analyses into a knowledge vault | source artifacts | `citadel/`, `paper-bank/` |
+
+## Architecture
+
+The system uses two complementary storage layers:
+
+### Personal Memory (`~/Documents/memory/`)
+
+Core identity files loaded every session:
+- `AGENTS.md` — operating procedures and pre-flight checklist
+- `SOUL.md` — ethics and quality standards
+- `IDENTITY.md` — system identity and workspace boundaries
+- `USER.md` — user profile and preferences
+
+Plus searchable memory managed by memory-manager:
+- `long-term/` and `short-term/` — atomic notes indexed by `catalog.md`
+- `workflow-templates/` — learned workflow patterns
+- `archive/` — retired memory (not actively searched)
+
+### Knowledge Vault (`~/Documents/citadel/`)
+
+An Obsidian vault for structured knowledge:
+- Market intelligence (reports, analyses, ticker notes)
+- Literature (paper notes, digests, field summaries)
+- Reference material (tool notes, system references)
+
+### Data Flow
+
+```
+experience-logger --> experiences/
+                          |
+                    memory-manager --> memories/ (long-term, short-term)
+                          |                |
+                          |         memory-retriever --> expanded instruction
+                          |
+                    knowledge-maester --> citadel/ (vault notes)
+```
+
+## Setup
+
+### Prerequisites
+
+- Python 3.12+
+- Obsidian desktop app (optional, for knowledge-maester vault operations)
+
+### First-Time Setup
+
+Bootstrap a personal memory directory:
+
+```bash
+python3 memory-manager/bootstrap.py --memory-root ~/Documents/memory/
+```
+
+This creates the directory structure and placeholder core files. Personalize the core files, then build the initial catalog:
+
+```bash
+python3 knowledge-maester/scripts/generate_memory_catalog.py --vault-path ~/Documents/memory/
+```
+
+### Configuration
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `OBSIDIAN_CLI_PATH` | `/Applications/Obsidian.app/Contents/MacOS/obsidian` | Path to Obsidian CLI binary |
+
+## Running Tests
+
+Tests are a mix of unit tests and integration tests. Integration tests require a configured workspace with `memories/` at the expected location and will skip gracefully if not found.
+
+```bash
+python3 -m pytest memory-retriever/
+python3 -m pytest experience-logger/
+python3 -m pytest memory-manager/
+python3 -m pytest knowledge-maester/tests/
+```
+
+Or run individual test files:
+
+```bash
+python3 memory-retriever/test_memory_retriever.py
+python3 experience-logger/test_experience_logger.py
+python3 memory-manager/test_memory_manager.py
+```
+
+## License
+
+MIT
