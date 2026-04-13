@@ -2,6 +2,17 @@
 
 Four skills for persistent memory across AI agent sessions. Built as model-agnostic markdown instructions that any LLM agent can follow.
 
+## Quick Start (new machine)
+
+```bash
+git clone https://github.com/ChenShizhe/memory-skill.git
+cd memory-skill
+mkdir -p ~/Documents/memory ~/Documents/citadel ~/Documents/experiences
+python3 memory-manager/bootstrap.py --memory-root ~/Documents/memory/
+```
+
+**Done:** `~/Documents/memory/AGENTS.md` exists. See [SETUP.md](SETUP.md) for the full walkthrough including cross-platform notes and verification.
+
 ## Skills
 
 | Skill | Purpose | Reads | Writes |

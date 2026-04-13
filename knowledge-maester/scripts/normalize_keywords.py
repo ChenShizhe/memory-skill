@@ -616,7 +616,7 @@ def build_cli() -> argparse.ArgumentParser:
         "--cite-keys",
         type=str,
         default=None,
-        help='Comma-separated cite keys to process (e.g., "bonnet2024testing,bacry2016estimation")',
+        help='Comma-separated cite keys to process (e.g., "smith2024methods,jones2023analysis")',
     )
     parser.add_argument(
         "--all-unclassified",
