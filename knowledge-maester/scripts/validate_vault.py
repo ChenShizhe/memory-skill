@@ -54,9 +54,11 @@ def validate_vault(vault_path: Path, paper_bank_path: Path) -> dict:
         fm, body = vault_io.parse_frontmatter(content)
 
         note_type = fm.get("type", "")
+        is_subnote = cg._is_paper_subnote(rel_path)
 
         # --- Shared required fields (already in check_graph, repeat here for standalone use) ---
-        for field in vault_io.REQUIRED_FRONTMATTER_FIELDS:
+        check_fields = cg.SUB_NOTE_REQUIRED_FIELDS if is_subnote else vault_io.REQUIRED_FRONTMATTER_FIELDS
+        for field in check_fields:
             if field not in fm:
                 issues.append({
                     "severity": "ERROR",
@@ -66,7 +68,8 @@ def validate_vault(vault_path: Path, paper_bank_path: Path) -> dict:
                 })
 
         # --- Invalid type value ---
-        if note_type and note_type not in vault_io.VALID_TYPES:
+        type_check_set = vault_io.ALL_VALID_TYPES if is_subnote else vault_io.VALID_TYPES
+        if note_type and note_type not in type_check_set:
             issues.append({
                 "severity": "ERROR",
                 "type": "invalid_type",

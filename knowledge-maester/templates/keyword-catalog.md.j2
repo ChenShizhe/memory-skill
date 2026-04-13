@@ -1,0 +1,47 @@
+---
+type: moc
+title: "{{ keyword.name }}"
+taxonomy_path: "{{ keyword.path }}"
+paper_count: {{ papers | length }}
+date: "{{ today }}"
+last_updated: "{{ today }}"
+tags: [catalog, auto-generated]
+status: active
+---
+
+<!-- AUTO-GENERATED: keyword-catalog {{ keyword.path }}. Do not edit between markers. -->
+
+# {{ keyword.name }}
+
+**Taxonomy path:** {{ keyword.path }}
+**Papers:** {{ papers | length }}  |  **Years:** {{ year_min }}–{{ year_max }}
+
+{% if parent %}
+**Parent:** [[{{ parent.slug }}|{{ parent.name }}]]
+{% endif %}
+
+{% if children %}
+## Subtopics
+
+{% for child in children %}
+- [[{{ child.slug }}|{{ child.name }}]] ({{ child.paper_count }} papers)
+{% endfor %}
+{% endif %}
+
+## Papers
+
+| Title | Authors | Year | Status |
+|---|---|---|---|
+{% for p in papers %}
+| [[{{ p.cite_key }}|{{ p.title | truncate(50) }}]] | {{ p.first_author }} | {{ p.year }} | {{ p.review_status }} |
+{% endfor %}
+
+{% if top_authors %}
+## Top Authors
+
+{% for author, count in top_authors %}
+- {{ author }} ({{ count }} papers)
+{% endfor %}
+{% endif %}
+
+<!-- /AUTO-GENERATED -->

@@ -42,7 +42,7 @@ STALE_THRESHOLDS = {
     "ticker": 90,
 }
 
-VALID_TYPES = {"report", "paper", "ticker", "analysis", "digest", "memory"}
+VALID_TYPES = vault_io.ALL_VALID_TYPES
 MEMORY_VALID_TYPES = {
     "workflow",
     "decision",
@@ -53,7 +53,7 @@ MEMORY_VALID_TYPES = {
     "hub",
     "operational",
 }
-VALID_STATUSES = {"active", "archived", "stale", "draft"}
+VALID_STATUSES = vault_io.VALID_STATUSES
 REQUIRED_FIELDS = {"type", "title", "date", "tags", "last_updated", "status"}
 MEMORY_REQUIRED_FIELDS = {"type", "title", "layer", "date", "last_updated", "status"}
 MEMORY_SKIP_DIRS = {".obsidian", "workflow-templates", "archive"}
@@ -101,7 +101,13 @@ def build_link_index(notes: list[Path], vault_path: Path) -> tuple[dict, dict]:
         rel_path = str(note_path.relative_to(vault_path))
         content = note_path.read_text(encoding="utf-8", errors="replace")
         links = vault_io.extract_wiki_links(content)
-        stems = {lnk.split("|")[0].split("#")[0].strip().lower() for lnk in links}
+        stems = set()
+        for lnk in links:
+            s = lnk.split("|")[0].split("#")[0].strip().lower()
+            # Strip .md suffix — Obsidian treats [[note.md]] same as [[note]]
+            if s.endswith(".md"):
+                s = s[:-3]
+            stems.add(s)
         outgoing[rel_path] = stems
         for stem in stems:
             incoming.setdefault(stem, set()).add(rel_path)
@@ -110,8 +116,44 @@ def build_link_index(notes: list[Path], vault_path: Path) -> tuple[dict, dict]:
 
 
 def build_stem_index(notes: list[Path], vault_path: Path) -> dict[str, Path]:
-    """Map lowercase stem -> path."""
-    return {note.stem.lower(): note for note in notes}
+    """Map lowercase stem -> path, including path-based keys for sub-notes."""
+    index = {}
+    for note in notes:
+        index[note.stem.lower()] = note
+        # Add path-based keys for sub-notes (e.g., "cite_key/intro")
+        rel = note.relative_to(vault_path)
+        rel_no_ext = str(rel.with_suffix("")).lower()
+        index[rel_no_ext] = note
+        # Obsidian also resolves short relative paths (last 2 parts)
+        parts = rel.with_suffix("").parts
+        if len(parts) >= 2:
+            short_path = "/".join(parts[-2:]).lower()
+            if short_path not in index:
+                index[short_path] = note
+    return index
+
+
+def _is_paper_subnote(rel_path: str) -> bool:
+    """Check if a note is a sub-note inside a paper directory (e.g., literature/papers/key/intro.md)."""
+    parts = rel_path.split("/")
+    # Pattern: literature/papers/<cite_key>/<subnote>.md — 4+ parts with papers as 2nd
+    return (len(parts) >= 4
+            and parts[0] == "literature"
+            and parts[1] == "papers"
+            and not parts[-1].startswith("_"))
+
+
+def _is_paper_companion(rel_path: str) -> bool:
+    """Check if a note is a companion file (e.g., cite_key-notation.md) at papers root level."""
+    parts = rel_path.split("/")
+    if len(parts) == 3 and parts[0] == "literature" and parts[1] == "papers":
+        stem = Path(parts[2]).stem
+        return "-notation" in stem or "-reading" in stem
+    return False
+
+
+# Reduced required fields for paper sub-notes (they use a simpler schema)
+SUB_NOTE_REQUIRED_FIELDS = {"cite_key", "status"}
 
 
 def check_graph(vault_path: Path, paper_bank_path: Path, schema: str = "citadel") -> dict:
@@ -124,15 +166,18 @@ def check_graph(vault_path: Path, paper_bank_path: Path, schema: str = "citadel"
     outgoing, incoming = build_link_index(notes, vault_path)
     stem_index = build_stem_index(notes, vault_path)
 
-    seen_cite_keys = {}  # cite_key -> rel_path
+    seen_cite_keys = {}  # cite_key -> rel_path (primary notes only)
 
     for note_path in notes:
         rel_path = str(note_path.relative_to(vault_path))
         content = note_path.read_text(encoding="utf-8", errors="replace")
         fm, _ = vault_io.parse_frontmatter(content)
 
+        is_subnote = _is_paper_subnote(rel_path)
+
         # --- Missing required frontmatter ---
-        for field in required_fields:
+        check_fields = SUB_NOTE_REQUIRED_FIELDS if is_subnote else required_fields
+        for field in check_fields:
             if field not in fm or fm[field] == "" or fm[field] == []:
                 # tags: [] is acceptable
                 if field == "tags" and isinstance(fm.get("tags"), list):
@@ -146,7 +191,8 @@ def check_graph(vault_path: Path, paper_bank_path: Path, schema: str = "citadel"
 
         # --- Invalid frontmatter values ---
         note_type = fm.get("type", "")
-        if note_type and note_type not in valid_types:
+        type_check_set = vault_io.ALL_VALID_TYPES if is_subnote else valid_types
+        if note_type and note_type not in type_check_set:
             issues.append({
                 "severity": "ERROR",
                 "type": "invalid_frontmatter",
@@ -173,8 +219,9 @@ def check_graph(vault_path: Path, paper_bank_path: Path, schema: str = "citadel"
                     "detail": f"{date_field}={val!r} is not a valid ISO date",
                 })
 
-        # --- Duplicate cite_keys ---
-        if schema != "memory":
+        # --- Duplicate cite_keys (skip sub-notes and companion files — they share parent's cite_key) ---
+        is_companion = _is_paper_companion(rel_path)
+        if schema != "memory" and not is_subnote and not is_companion:
             cite_key = fm.get("cite_key", "")
             if cite_key:
                 if cite_key in seen_cite_keys:
@@ -192,6 +239,9 @@ def check_graph(vault_path: Path, paper_bank_path: Path, schema: str = "citadel"
         for link_stem in note_outgoing:
             if link_stem.startswith("_") and not (schema == "memory" and link_stem.startswith("_hub-")):
                 continue  # skip index links
+            # Skip LaTeX/math expressions accidentally parsed as wikilinks
+            if re.search(r"[{}\\^]", link_stem) or link_stem.startswith("τ") or link_stem.startswith("δ"):
+                continue
             if link_stem not in stem_index:
                 issues.append({
                     "severity": "WARNING",

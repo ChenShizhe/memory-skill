@@ -19,12 +19,17 @@ Usage:
     [--dry-run]
 """
 import argparse
+import logging
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import vault_io
+import normalize_keywords
+import build_taxonomy_db
+
+logger = logging.getLogger(__name__)
 
 TYPE_TO_DIRECTORY = {
     "paper": "literature/papers",
@@ -324,6 +329,51 @@ def ingest_field(
     return {"vault_path": rel_path, "stubs_created": [], "status": "created"}
 
 
+def _run_post_ingestion_hook(
+    cite_key: str,
+    vault_path: Path,
+    taxonomy_path: Path,
+    synonym_map_path: Path,
+    skip_index: bool = False,
+) -> dict:
+    """Post-ingestion: normalize keywords and update SQLite index.
+
+    Skips silently with a warning if taxonomy.yaml does not exist.
+    """
+    if not taxonomy_path.exists():
+        logger.warning(
+            "taxonomy.yaml not found at %s — skipping post-ingestion keyword normalization",
+            taxonomy_path,
+        )
+        print(f"WARN: taxonomy.yaml not found at {taxonomy_path} — skipping post-ingestion hook")
+        return {"normalize": "skipped", "index": "skipped", "reason": "taxonomy not found"}
+
+    # Stage 1: keyword normalization for this paper
+    normalize_result = normalize_keywords.run_pipeline(
+        vault_path=vault_path,
+        taxonomy_path=taxonomy_path,
+        synonym_map_path=synonym_map_path,
+        cite_keys=[cite_key],
+    )
+    print(f"KEYWORDS_NORMALIZED: resolved={normalize_result['total_resolved']}, "
+          f"unmatched={normalize_result['total_unmatched']}")
+
+    # Stage 2: incremental SQLite index update
+    if skip_index:
+        print("SKIP_INDEX: --skip-index flag set, skipping SQLite update")
+        return {"normalize": normalize_result, "index": "skipped"}
+
+    build_taxonomy_db.main([
+        "--vault-path", str(vault_path),
+        "--taxonomy", str(taxonomy_path),
+        "--synonym-map", str(synonym_map_path),
+        "--incremental",
+    ])
+    print(f"INDEX_UPDATED: incremental build complete")
+
+    return {"normalize": normalize_result, "index": "updated"}
+
+
 def _extract_h1(body: str) -> str:
     m = re.search(r"^#\s+(.+)$", body, re.MULTILINE)
     return m.group(1).strip() if m else ""
@@ -402,11 +452,31 @@ def main():
     parser.add_argument("--vault-path", default=str(vault_io.DEFAULT_VAULT_PATH))
     parser.add_argument("--paper-bank-path", default=str(vault_io.DEFAULT_PAPER_BANK_PATH))
     parser.add_argument("--dry-run", action="store_true", help="Validate inputs and show target path without writing.")
+    parser.add_argument(
+        "--taxonomy",
+        default=None,
+        help="Path to taxonomy.yaml (default: <vault-path>/taxonomy.yaml). "
+             "Enables post-ingestion keyword normalization.",
+    )
+    parser.add_argument(
+        "--synonym-map",
+        default=None,
+        help="Path to synonym_map.json (default: <vault-path>/synonym_map.json).",
+    )
+    parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        default=False,
+        help="Skip SQLite index update after ingestion (for batch operations).",
+    )
     args = parser.parse_args()
 
     note_path = Path(args.note).expanduser().resolve()
     vault_path = Path(args.vault_path).expanduser()
     paper_bank_path = Path(args.paper_bank_path).expanduser()
+
+    taxonomy_path = Path(args.taxonomy) if args.taxonomy else (vault_path / "taxonomy.yaml")
+    synonym_map_path = Path(args.synonym_map) if args.synonym_map else (vault_path / "synonym_map.json")
 
     if not note_path.exists():
         print(f"ERROR: Note file not found: {note_path}")
@@ -437,6 +507,16 @@ def main():
         result = ingest_note_type(args.type, note_path, vault_path, args.cite_key or "")
 
     print(f"DONE: status={result['status']}, stubs={len(result['stubs_created'])}")
+
+    # Post-ingestion hook: keyword normalization + SQLite index update
+    if args.type == "paper" and result["status"] in ("created", "updated"):
+        _run_post_ingestion_hook(
+            cite_key=args.cite_key,
+            vault_path=vault_path,
+            taxonomy_path=taxonomy_path,
+            synonym_map_path=synonym_map_path,
+            skip_index=args.skip_index,
+        )
 
 
 if __name__ == "__main__":

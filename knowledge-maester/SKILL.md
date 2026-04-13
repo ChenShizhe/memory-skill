@@ -34,6 +34,11 @@ Knowledge-maester:
 | Literature surveys | `~/Documents/citadel/literature/surveys/` |
 | Reference | `~/Documents/citadel/reference/` |
 | Templates (vault) | `~/Documents/citadel/templates/` |
+| Literature SQLite index | `~/Documents/citadel/literature/_index.db` |
+| Literature catalog MOCs | `~/Documents/citadel/literature/_catalog/` |
+| Taxonomy definition | `~/Documents/citadel/taxonomy.yaml` |
+| Synonym map | `~/Documents/citadel/synonym_map.json` |
+| Pending terms queue | `~/Documents/citadel/pending_terms.yaml` |
 | Paper bank | `~/Documents/paper-bank/` |
 | Paper bank manifest | `~/Documents/paper-bank/_manifest.json` |
 
@@ -77,7 +82,8 @@ python3 knowledge-maester/scripts/ingest_report.py \
 python3 knowledge-maester/scripts/ingest_paper.py \
   --cite-key CITE_KEY \
   --note PATH_TO_NOTE_MD \
-  [--vault-path PATH] [--paper-bank-path PATH]
+  [--vault-path PATH] [--paper-bank-path PATH] \
+  [--taxonomy PATH] [--synonym-map PATH] [--skip-index]
 
 # Ingest a market-thinker analysis
 python3 knowledge-maester/scripts/ingest_analysis.py \
@@ -130,7 +136,107 @@ python3 knowledge-maester/scripts/generate_memory_catalog.py \
 # Full vault structural validation
 python3 knowledge-maester/scripts/validate_vault.py \
   [--vault-path PATH] [--output PATH_TO_JSON]
+
+# Build/rebuild the literature SQLite index from vault Markdown
+python3 knowledge-maester/scripts/build_taxonomy_db.py \
+  [--vault-path PATH] [--taxonomy PATH] [--synonym-map PATH] \
+  [--db-path PATH] [--incremental] [--full-rebuild]
+
+# Normalize paper keywords against the taxonomy (3-stage pipeline)
+python3 knowledge-maester/scripts/normalize_keywords.py \
+  [--vault-path PATH] [--taxonomy PATH] [--synonym-map PATH] \
+  [--cite-keys "key1,key2"] [--all-unclassified] [--no-write] \
+  [--pending-output PATH]
+
+# Generate per-keyword catalog MOC pages from SQLite index
+python3 knowledge-maester/scripts/generate_catalog_mocs.py \
+  [--vault-path PATH] [--db-path PATH] \
+  [--keyword KEYWORD_PATH | --all]
+
+# Taxonomy maintenance: report, promote, split, merge
+python3 knowledge-maester/scripts/maintain_taxonomy.py \
+  [--vault-path PATH] [--taxonomy PATH] [--synonym-map PATH] \
+  [--db-path PATH] \
+  --report
+
+python3 knowledge-maester/scripts/maintain_taxonomy.py \
+  [--vault-path PATH] [--taxonomy PATH] [--synonym-map PATH] \
+  --promote-pending pending_terms.yaml
+
+python3 knowledge-maester/scripts/maintain_taxonomy.py \
+  [--vault-path PATH] [--taxonomy PATH] [--db-path PATH] \
+  --split "parent/branch" --into "child1,child2" [--confirm]
+
+python3 knowledge-maester/scripts/maintain_taxonomy.py \
+  [--vault-path PATH] [--taxonomy PATH] [--db-path PATH] \
+  --merge "branch1,branch2" --into "target/branch" [--confirm]
 ```
+
+## Taxonomy & Catalog Scripts
+
+### build_taxonomy_db.py
+
+Populates or rebuilds the SQLite literature index (`literature/_index.db`) from vault Markdown notes. Loads `taxonomy.yaml` for keyword hierarchy and `synonym_map.json` for alias resolution. Scans `literature/papers/*.md`, imports claims from `literature/claims/*.json`, builds FTS5 full-text search, and cleans orphan records.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--vault-path` | `~/Documents/citadel` | Vault root |
+| `--taxonomy` | `<vault-path>/taxonomy.yaml` | Taxonomy definition file |
+| `--synonym-map` | `<vault-path>/synonym_map.json` | Synonym/alias mapping |
+| `--db-path` | `<vault-path>/literature/_index.db` | SQLite database path |
+| `--incremental` | off | Skip files whose content hash matches the DB |
+| `--full-rebuild` | off | Drop and recreate all tables before populating |
+
+### normalize_keywords.py
+
+Three-stage keyword normalization pipeline that maps raw author keywords from paper frontmatter to canonical taxonomy terms:
+1. **String normalization** — lowercase, hyphen normalization, depluralization, acronym expansion
+2. **Dictionary lookup** — resolve against `synonym_map.json` and `taxonomy.yaml`
+3. **Pending output** — unmatched terms appended to `pending_terms.yaml` for human review (no LLM calls)
+
+When normalization succeeds, writes `controlled_keywords` into the paper's YAML frontmatter.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--vault-path` | `~/Documents/citadel` | Vault root |
+| `--taxonomy` | `<vault-path>/taxonomy.yaml` | Taxonomy definition file |
+| `--synonym-map` | `<vault-path>/synonym_map.json` | Synonym/alias mapping |
+| `--cite-keys` | (none) | Comma-separated cite keys to process |
+| `--all-unclassified` | off | Process all papers with empty `controlled_keywords` |
+| `--no-write` | off | Dry run — do not modify paper frontmatter |
+| `--pending-output` | `<vault-path>/pending_terms.yaml` | Output path for unmatched terms |
+
+### generate_catalog_mocs.py
+
+Generates per-keyword Markdown catalog (MOC) pages in `literature/_catalog/` from the SQLite index. Each page includes `type: moc` frontmatter (for memory-retriever MOC detection), a paper listing table, child/parent navigation links, and statistics. Also generates `literature/_catalog/_index.md` as a taxonomy overview.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--vault-path` | `~/Documents/citadel` | Vault root |
+| `--db-path` | `<vault-path>/literature/_index.db` | SQLite database path |
+| `--keyword` | (none) | Regenerate only this keyword path |
+| `--all` | off | Regenerate all keyword catalog pages |
+
+Requires the SQLite index to exist (run `build_taxonomy_db.py` first).
+
+### maintain_taxonomy.py
+
+Taxonomy evolution and maintenance with four modes:
+
+- **`--report`** — Print density stats, flag dense branches (>50 papers, consider splitting) and sparse branches (<2 papers, consider merging), and count pending terms.
+- **`--promote-pending FILE`** — Promote entries with `status: approved` and `suggested_canonical` from `pending_terms.yaml` into `taxonomy.yaml` + `synonym_map.json`.
+- **`--split BRANCH --into child1,child2`** — Split a dense branch into children. Without `--confirm`: outputs `split_assignments.yaml` for review. With `--confirm`: creates branches.
+- **`--merge src1,src2 --into target`** — Merge sparse branches into a target. Reassigns papers, moves aliases, removes source branches. Requires `--confirm` to apply.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--vault-path` | `~/Documents/citadel` | Vault root |
+| `--taxonomy` | `<vault-path>/taxonomy.yaml` | Taxonomy definition file |
+| `--synonym-map` | `<vault-path>/synonym_map.json` | Synonym/alias mapping |
+| `--db-path` | `<vault-path>/literature/_index.db` | SQLite database path |
+| `--confirm` | off | Apply changes (default is dry-run for `--split` and `--merge`) |
+
+Safety: `--split` and `--merge` require `--confirm` to apply changes. A `taxonomy.yaml.bak` backup is created before any modification.
 
 ## Memory Vault Support
 
@@ -157,7 +263,14 @@ This memory-vault support is separate from Citadel ingestion paths such as `mark
    - Creates stub notes for referenced entities that don't exist yet
    - Writes the note to the correct vault subdirectory
    - Updates `_manifest.json` for paper notes
-4. After ingestion, run `check_graph.py` to verify no broken links were introduced.
+4. **Post-ingestion keyword normalization** (paper notes only, automatic when `taxonomy.yaml` exists):
+   - `ingest_paper.py` runs `normalize_keywords.py` for the ingested cite key
+   - Raw `keywords` from the paper frontmatter are normalized against the taxonomy
+   - Resolved keywords are written as `controlled_keywords` in the paper frontmatter
+   - Unmatched keywords are appended to `pending_terms.yaml` for human review
+   - Unless `--skip-index` is set, an incremental `build_taxonomy_db.py` run updates the SQLite index
+   - If `taxonomy.yaml` does not exist, the hook is skipped silently (backward compatible)
+5. After ingestion, run `check_graph.py` to verify no broken links were introduced.
 
 ### Polishing an Existing Note
 
@@ -196,6 +309,16 @@ Run `generate_index.py` after significant ingestion batches. This rebuilds:
 - `citadel/market/_dashboard.md` — recent reports, active watchlist, sector activity
 - `citadel/literature/_catalog.md` — paper bank catalog synced with paper-bank manifest
 
+### Rebuilding the Literature Catalog
+
+For taxonomy-aware catalog pages, run these scripts in order after batch ingestion:
+
+1. `normalize_keywords.py --all-unclassified` — normalize keywords for all unclassified papers
+2. `build_taxonomy_db.py --incremental` — update the SQLite index with new/changed papers
+3. `generate_catalog_mocs.py --all` — regenerate all per-keyword catalog MOC pages in `_catalog/`
+
+The catalog MOCs in `literature/_catalog/` are auto-generated with `type: moc` frontmatter and are consumed by memory-retriever for exploratory queries.
+
 ## Ingestion Contracts Summary
 
 | Source Type | Script | Input | Vault Target |
@@ -207,6 +330,24 @@ Run `generate_index.py` after significant ingestion batches. This rebuilds:
 | Field summary | `ingest_paper.py --type field` | Field summary from research workspace | `literature/fields/` |
 | Reference/capability note | `ingest_reference.py` | Reference markdown + explicit metadata flags | `reference/` |
 | Memory note | `ingest_memory.py` | Source markdown + CLI metadata flags | `long-term/` or `short-term/` |
+
+### Paper Ingestion Input Fields
+
+The paper note input (from paper-reader) may include these frontmatter fields consumed by the ingestion and normalization pipeline:
+
+| Field | Required | Description |
+|---|---|---|
+| `title` | yes | Paper title |
+| `cite_key` | yes | Unique citation identifier |
+| `authors` | yes | Author list |
+| `year` | yes | Publication year |
+| `keywords` | no | Raw author-provided keywords (input to normalization pipeline) |
+| `author_keywords` | no | Alternate field for author keywords |
+| `summary` | no | One-two sentence TL;DR (extracted by paper-reader) |
+| `methods` | no | Key statistical/computational methods used |
+| `controlled_keywords` | no | Canonical taxonomy paths (written by `normalize_keywords.py`, not by paper-reader) |
+
+The `keywords`/`author_keywords` fields are consumed by `normalize_keywords.py` during the post-ingestion hook. The `summary` field is extracted from the note body Summary/Abstract sections and included in the vault note.
 
 ## Hard Rules
 

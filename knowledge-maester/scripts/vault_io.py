@@ -17,8 +17,20 @@ DEFAULT_VAULT_PATH = Path.home() / "Documents" / "citadel"
 DEFAULT_PAPER_BANK_PATH = Path.home() / "Documents" / "paper-bank"
 OBSIDIAN_CLI_PATH = Path(os.environ.get("OBSIDIAN_CLI_PATH", "/Applications/Obsidian.app/Contents/MacOS/obsidian"))
 
-VALID_TYPES = {"report", "paper", "ticker", "analysis", "digest", "memory"}
-VALID_STATUSES = {"active", "archived", "stale", "draft"}
+VALID_TYPES = {
+    "report", "paper", "ticker", "analysis", "digest", "memory",
+    "moc", "reading-note", "stub", "survey", "concept",
+    "notation-summary", "literature-note", "conference",
+}
+# Types used by paper sub-notes (method.md, intro.md, etc. inside paper dirs)
+SUB_NOTE_TYPES = {
+    "method", "theory", "model", "gaps", "empirical", "notation",
+    "proofs", "intro", "method-note", "theory-note", "model-note",
+    "intro-note", "proofs-note", "gaps-note", "empirical-note",
+    "notation-note",
+}
+ALL_VALID_TYPES = VALID_TYPES | SUB_NOTE_TYPES
+VALID_STATUSES = {"active", "archived", "stale", "draft", "reviewed", "stub", "dummy", "not-applicable"}
 
 REQUIRED_FRONTMATTER_FIELDS = {"type", "title", "date", "tags", "last_updated", "status"}
 
@@ -302,7 +314,16 @@ def read_manifest(paper_bank_path: Path) -> list[dict]:
     if not manifest_path.exists():
         return []
     try:
-        return json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            # Handle dict format: {"papers": {"key": {...}, ...}} or {"key": {...}, ...}
+            papers = data.get("papers", data)
+            if isinstance(papers, dict):
+                return list(papers.values())
+            return []
+        return []
     except (json.JSONDecodeError, OSError):
         return []
 
