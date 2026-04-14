@@ -84,14 +84,16 @@ cp -R knowledge-maester "$SKILL_DIR/knowledge-maester"
 # 1. Check bootstrap output exists
 ls ~/Documents/memory/AGENTS.md && echo "OK: Memory bootstrapped"
 
-# 2. Run tests (some integration tests will skip if vault is empty)
-python3 -m pytest memory-retriever/ -q
-python3 -m pytest experience-logger/ -q
-python3 -m pytest memory-manager/ -q
+# 2. Run unit tests (pytest)
 python3 -m pytest knowledge-maester/tests/ -q
+
+# 3. Run integration tests (direct execution — skip gracefully on fresh install)
+python3 memory-retriever/test_memory_retriever.py
+python3 experience-logger/test_experience_logger.py
+python3 memory-manager/test_memory_manager.py
 ```
 
-**Done signal:** All four test suites should report 0 failures. Some tests may skip — that is expected on a fresh install with an empty vault.
+**Done signal:** pytest reports 0 failures for knowledge-maester. Each integration test prints "passed" or "SKIP" (expected on a fresh install with an empty vault).
 
 ## Environment Variables
 

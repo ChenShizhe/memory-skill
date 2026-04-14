@@ -87,18 +87,13 @@ python3 knowledge-maester/scripts/generate_memory_catalog.py --vault-path ~/Docu
 
 ## Running Tests
 
-Tests are a mix of unit tests and integration tests. Integration tests require a configured workspace with `memories/` at the expected location and will skip gracefully if not found.
+Tests are a mix of unit tests (knowledge-maester) and integration tests (the other three skills). Integration tests use custom assertion functions and must be run directly — they are not pytest-discoverable.
 
 ```bash
-python3 -m pytest memory-retriever/
-python3 -m pytest experience-logger/
-python3 -m pytest memory-manager/
-python3 -m pytest knowledge-maester/tests/
-```
+# Unit tests (pytest)
+python3 -m pytest knowledge-maester/tests/ -q
 
-Or run individual test files:
-
-```bash
+# Integration tests (direct execution — skip gracefully if workspace is not configured)
 python3 memory-retriever/test_memory_retriever.py
 python3 experience-logger/test_experience_logger.py
 python3 memory-manager/test_memory_manager.py
