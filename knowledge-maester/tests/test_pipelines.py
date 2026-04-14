@@ -396,12 +396,12 @@ def test5_compression():
 
     # Find compression candidates
     candidates = find_candidates(VAULT_PATH, days=30)
-    candidate_paths = [str(c[0].relative_to(VAULT_PATH)) for c in candidates]
+    candidate_paths = [str(c[0].relative_to(VAULT_PATH)).replace("\\", "/") for c in candidates]
     assert rel_path in candidate_paths, \
         f"Old note not found in compression candidates. Found: {candidate_paths}"
 
     # Compress the candidate
-    target = next(c for c in candidates if str(c[0].relative_to(VAULT_PATH)) == rel_path)
+    target = next(c for c in candidates if str(c[0].relative_to(VAULT_PATH)).replace("\\", "/") == rel_path)
     note_path, cand_fm, cand_body, age = target
     result = compress_note(note_path, cand_fm, cand_body, VAULT_PATH, dry_run=False)
     update_compression_log(VAULT_PATH, [result])
@@ -481,7 +481,7 @@ def test6_graph_health():
     broken_issues = [
         i for i in graph_report["issues"]
         if i["type"] == "broken_link"
-        and broken_rel in i.get("note", "")
+        and broken_rel in i.get("note", "").replace("\\", "/")
         and "c3-nonexistent-target-xyz" in i.get("detail", "")
     ]
     assert broken_issues, \
