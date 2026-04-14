@@ -1,6 +1,6 @@
 # memory-skill
 
-Four skills for persistent memory across AI agent sessions. Built as model-agnostic markdown instructions that any LLM agent can follow.
+Four skills for persistent memory across AI agent sessions. Built as [Claude Code](https://claude.ai/claude-code) skills — model-agnostic markdown instructions that any LLM agent runtime can follow.
 
 ## Quick Start (new machine)
 
@@ -12,6 +12,19 @@ python3 memory-manager/bootstrap.py --memory-root ~/Documents/memory/
 ```
 
 **Done:** `~/Documents/memory/AGENTS.md` exists. See [SETUP.md](SETUP.md) for the full walkthrough including cross-platform notes and verification.
+
+## Usage Example
+
+```
+You: "Remember that the deploy target for project X is us-east-1."
+  --> experience-logger writes a log to experiences/
+
+You: "Ingest recent experiences."
+  --> memory-manager reads experiences/, writes a searchable note to memories/
+
+(Next session) You: "Set up the deploy pipeline for project X."
+  --> memory-retriever loads the us-east-1 note into the agent's context automatically
+```
 
 ## Skills
 
