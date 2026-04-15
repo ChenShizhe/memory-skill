@@ -1,6 +1,6 @@
 # memory-skill
 
-Four skills for persistent memory across AI agent sessions. Built as [Claude Code](https://claude.ai/claude-code) skills — model-agnostic markdown instructions that any LLM agent runtime can follow.
+Four skills for persistent memory across AI agent sessions. Built as model-agnostic markdown instructions that any LLM agent runtime can follow.
 
 ## Quick Start (new machine)
 
