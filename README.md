@@ -76,7 +76,7 @@ experience-logger --> experiences/
 ### Prerequisites
 
 - Python 3.12+
-- Obsidian desktop app (optional, for knowledge-maester vault operations)
+- [Obsidian](https://obsidian.md/) desktop app (optional, for knowledge-maester vault operations). See also [Obsidian CLI](https://obsidian.md/cli)
 
 ### First-Time Setup
 
