@@ -90,6 +90,15 @@ python3 knowledge-maester/scripts/ingest_analysis.py \
   --source PATH_TO_ANALYSIS_MD \
   [--vault-path PATH]
 
+# Ingest a ticker profile (create a new profile or append a thesis block)
+python3 knowledge-maester/scripts/ingest_ticker.py \
+  --mode create --source PATH_TO_PROFILE_MD --ticker SYMBOL \
+  [--vault-path PATH] [--overwrite]
+
+python3 knowledge-maester/scripts/ingest_ticker.py \
+  --mode append-thesis --source PATH_TO_THESIS_BLOCK_MD --ticker SYMBOL \
+  [--vault-path PATH]
+
 # Ingest a reference/capability memory note
 python3 knowledge-maester/scripts/ingest_reference.py \
   --source PATH_TO_SOURCE_MD \
@@ -326,6 +335,7 @@ The catalog MOCs in `literature/_catalog/` are auto-generated with `type: moc` f
 | Market-watcher report | `ingest_report.py` | Validated markdown from project workspace | `market/reports/` |
 | Paper note | `ingest_paper.py` | Note markdown + `paper-bank/<cite_key>/` | `literature/papers/` |
 | Market-thinker analysis | `ingest_analysis.py` | Analysis markdown from project workspace | `market/analysis/` |
+| Ticker profile | `ingest_ticker.py` | Full profile (`--mode create`) or thesis-block fragment (`--mode append-thesis`) from a specialist's brief | `market/tickers/` |
 | Synthesis digest | `ingest_paper.py --type digest` | Digest from research workspace | `literature/digests/` |
 | Field summary | `ingest_paper.py --type field` | Field summary from research workspace | `literature/fields/` |
 | Reference/capability note | `ingest_reference.py` | Reference markdown + explicit metadata flags | `reference/` |

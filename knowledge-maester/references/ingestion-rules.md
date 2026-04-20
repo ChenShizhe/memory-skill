@@ -75,6 +75,61 @@ Steps:
 2. Write vault note as `type: memory` (closest fit; field summaries are reference material).
 3. Link to all source paper notes mentioned.
 
+## Ingestion Contract: Ticker Profile
+
+**Script:** `ingest_ticker.py`
+**Input:** Specialist-produced ticker-profile markdown (full profile for `--mode create`) or a thesis-block markdown fragment (for `--mode append-thesis`).
+**Target:** `market/tickers/<SYMBOL>.md`
+
+This contract applies to **full ticker profiles** (two-layer: static `## Fundamentals` + append-only `## Thesis updates`), distinct from auto-created ticker **stubs** (handled by `ingest_report.py` step 10 and `vault_io.ensure_ticker_stub`).
+
+### Mode `--mode create`
+
+Input frontmatter should include `type: ticker`, `symbol`, `name`, `sector`. Optional: `exchange`, `profile_layers`, `owner_specialist`, `source_caveats`, `watchlist`, `tags`. The source body must contain both `## Fundamentals` and `## Thesis updates` sections; the first thesis block must satisfy the three-layer spec (YAML brief, `#### Low-level block`, `#### High-level block`).
+
+Steps:
+
+1. Validate the source frontmatter's `symbol` matches `--ticker` (if present); otherwise accept and set from `--ticker`.
+2. Validate that the source body contains `## Fundamentals` and `## Thesis updates`.
+3. Validate that any thesis block under `## Thesis updates` contains the three required layers.
+4. Build vault frontmatter: set `type: ticker`, `symbol`, `last_updated` to today, default `status: active` if absent, default `tags: []` if absent.
+5. If the target file exists: without `--overwrite`, exit with `NOTE_EXISTS_AND_CURRENT` when `last_updated` is today. With `--overwrite`, extract the AUTO-GENERATED Appearances section from the existing file and re-attach it to the new body.
+6. If no AUTO-GENERATED Appearances marker is present in the source body, append an empty Appearances scaffold so `ingest_report.py` / `ingest_analysis.py` can populate it later.
+7. Write to `market/tickers/<SYMBOL>.md`.
+
+### Mode `--mode append-thesis`
+
+Input is a markdown fragment containing a single dated thesis block:
+
+```markdown
+### YYYY-MM-DD — <brief-trigger> (<owner_specialist>)
+
+```yaml
+<structured brief>
+```
+
+#### Low-level block — what the inputs say
+...
+
+#### High-level block — how this updates the thesis
+...
+```
+
+Source frontmatter is optional and ignored.
+
+Steps:
+
+1. Validate the target `market/tickers/<SYMBOL>.md` exists. If not, error — the caller must run `--mode create` first.
+2. Validate the source block contains a `### YYYY-MM-DD —` header, a ```yaml fenced code block, a `#### Low-level block` heading, and a `#### High-level block` heading. Missing any of these is an error.
+3. Locate the `## Thesis updates` section in the existing profile. Error if absent.
+4. Insert the new block at the end of the `## Thesis updates` section (before the next top-level heading or AUTO-GENERATED marker, preserving chronological order of prior blocks).
+5. Bump the profile's `last_updated` to today.
+6. Write the profile back.
+
+### Validation errors surface at the ingestion boundary
+
+Missing sub-sections (low-level block, high-level block) cause `ingest_ticker.py` to exit with a non-zero status and an explanatory message. This enforces the three-layer spec at the vault-write boundary, independent of whether the specialist that produced the brief followed the spec.
+
 ## Ingestion Contract: Market-Thinker Analysis
 
 **Script:** `ingest_analysis.py`

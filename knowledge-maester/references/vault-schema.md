@@ -76,7 +76,13 @@ Body sections:
 Target directory: `market/tickers/`
 Filename convention: `<SYMBOL>.md` (uppercase)
 
-Additional frontmatter:
+Ticker notes come in two shapes — **stub** and **profile** — that share the `type: ticker` identifier and the same filename convention.
+
+#### Ticker stub
+
+Stubs are auto-created by `ingest_report.py` and `ingest_analysis.py` whenever a ticker symbol is mentioned in an ingested report or analysis. A stub is a minimal shell that other notes can back-link into via the AUTO-GENERATED Appearances section.
+
+Frontmatter:
 ```yaml
 type: ticker
 symbol: ""             # e.g. NVDA
@@ -97,6 +103,60 @@ Body sections:
 - [[report-note-1]]
 <!-- /AUTO-GENERATED -->
 ```
+
+#### Ticker profile
+
+Profiles are richer specialist-produced documents, ingested via `ingest_ticker.py`. A profile uses a two-layer structure: static `## Fundamentals` + append-only `## Thesis updates` with dated blocks. Each dated block carries a three-layer structure (YAML brief + low-level evidence block + high-level thesis-update block).
+
+Additional profile frontmatter (extends the stub frontmatter):
+```yaml
+type: ticker
+symbol: ""
+name: ""
+sector: ""
+exchange: ""               # e.g. NYSE, NASDAQ, SHSE
+watchlist: []
+profile_layers:            # enumerates the layers present in the body
+  - fundamentals
+  - thesis_updates
+owner_specialist: ""       # e.g. power-grid-specialist
+source_caveats: ""         # single-line note on source completeness
+```
+
+Body sections:
+```markdown
+## Fundamentals
+*Last reviewed: YYYY-MM-DD — <owner_specialist>.*
+
+### Business description
+### Segments and revenue breakdown
+### Key customers and suppliers
+### Geographic footprint
+### Management
+### Main competitors
+
+## Thesis updates
+
+### YYYY-MM-DD — <brief-trigger> (<owner_specialist>)
+
+```yaml
+<structured brief per role-file Output schema>
+```
+
+#### Low-level block — what the inputs say
+<source-by-source evidence log; no interpretation>
+
+#### High-level block — how this updates the thesis
+<thesis-state reasoning; what would move the thesis>
+
+<!-- AUTO-GENERATED -->
+## Appearances
+<!-- /AUTO-GENERATED -->
+```
+
+The AUTO-GENERATED Appearances section is preserved when `ingest_ticker.py --mode create --overwrite` re-creates an existing profile.
+
+Template: `templates/ticker-profile-template.md` (for profiles) and `templates/ticker-template.md` (for stubs).
 
 ### Type: `analysis`
 
