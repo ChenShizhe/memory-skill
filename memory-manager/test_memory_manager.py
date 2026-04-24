@@ -15,6 +15,13 @@ from bootstrap import (  # noqa: E402
     write_entry_to_shard,
     update_index_for_shard,
     SHARD_HEADER_TEMPLATE,
+    file_route_proposal,
+    generate_route_candidates,
+    check_and_emit_capacity_signals,
+    process_route_proposals,
+    MISC_SOFT_THRESHOLD,
+    CATALOG_PHASE2_THRESHOLD,
+    PROPOSAL_REVIEW_THRESHOLD,
 )
 
 
@@ -117,6 +124,23 @@ def main() -> int:
     assert_contains(skill_md, "type: workflow_fragment", "catalog type for fragments")
     assert_contains(skill_md, "Override Protection", "override protection heading")
     assert_contains(skill_md, "→ [shared:", "shared fragment reference notation")
+
+    # Route Proposal Policy and Capacity Signals (brief m1-02).
+    assert_contains(skill_md, "## Route Proposal Policy", "route proposal policy section")
+    assert_contains(skill_md, "memories/proposals/ROUTE-<slug>-<date>.md", "route proposal file path")
+    assert_contains(skill_md, "proposal_type: route_ambiguous_card", "route proposal type field")
+    assert_contains(skill_md, "## Candidate shards", "route proposal candidate shards section")
+    assert_contains(skill_md, "confirm misc (no clear shard", "route proposal confirm misc option")
+    assert_contains(skill_md, "## Capacity Signals", "capacity signals section")
+    assert_contains(skill_md, "[SIGNAL] misc-shard at", "misc signal format")
+    assert_contains(skill_md, "[SIGNAL] catalog at", "catalog signal format")
+    assert_contains(skill_md, "[SIGNAL]", "proposal signal marker")
+    assert_contains(skill_md, "proposals pending — run memory-manager", "proposal signal format")
+    assert_contains(skill_md, "MISC_SOFT_THRESHOLD", "misc threshold constant reference")
+    assert_contains(skill_md, "CATALOG_PHASE2_THRESHOLD", "catalog threshold constant reference")
+    assert_contains(skill_md, "PROPOSAL_REVIEW_THRESHOLD", "proposal threshold constant reference")
+    assert_contains(skill_md, "### Misc Review (maintenance mode)", "misc review subsection")
+    assert_contains(skill_md, "15b. **Route-proposal filing.**", "ingestion pipeline step 15b")
 
     if catalog_index_md is not None:
         assert_contains(catalog_index_md, "### core-identity", "index core-identity block")
@@ -380,6 +404,251 @@ class TestShardWriteAndIndexUpdate(unittest.TestCase):
         self.assertEqual(route_card(frontmatter), "project-research-meeting.md")
 
 
+# ---------------------------------------------------------------------------
+# Route-proposal and capacity-signal unit tests
+# ---------------------------------------------------------------------------
+
+
+class TestFileRouteProposal(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.proposals = self.root / "proposals"
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_creates_proposal_file_with_expected_template(self) -> None:
+        card = {
+            "slug": "ambiguous-card",
+            "card_path": "memories/long-term/ambiguous-card.md",
+            "type": "project-pattern",
+            "topics": ["unusual-topic", "other"],
+            "projects": [],
+            "source_experience": "experiences/demo/summary.md",
+        }
+        candidates = [("paper-reading.md", "partial topic overlap")]
+        target = file_route_proposal(card, candidates, proposals_dir=self.proposals)
+        self.assertTrue(target.exists())
+        self.assertTrue(target.name.startswith("ROUTE-ambiguous-card-"))
+        self.assertTrue(target.name.endswith(".md"))
+        text = target.read_text(encoding="utf-8")
+        self.assertIn("# Proposed Route: ambiguous-card", text)
+        self.assertIn("proposal_type: route_ambiguous_card", text)
+        self.assertIn("card_slug: ambiguous-card", text)
+        self.assertIn("card_path: memories/long-term/ambiguous-card.md", text)
+        self.assertIn("current_shard: catalog-shards/misc.md", text)
+        self.assertIn("experiences/demo/summary.md", text)
+        self.assertIn("## Routing signals", text)
+        self.assertIn("type: project-pattern", text)
+        self.assertIn("unusual-topic", text)
+        self.assertIn("## Candidate shards", text)
+        self.assertIn("- [ ] catalog-shards/paper-reading.md — partial topic overlap", text)
+        self.assertIn("- [ ] confirm misc", text)
+        self.assertIn("## User decision", text)
+
+
+class TestGenerateRouteCandidates(unittest.TestCase):
+    def test_partial_topic_overlap_returns_shards(self) -> None:
+        fm = {"topics": ["paper-reading", "memory-ingestion"]}
+        result = generate_route_candidates(fm)
+        shards = [s for s, _ in result]
+        self.assertIn("paper-reading.md", shards)
+        self.assertIn("memory-system.md", shards)
+
+    def test_no_overlap_returns_empty(self) -> None:
+        fm = {"topics": ["completely-unknown-topic"]}
+        self.assertEqual(generate_route_candidates(fm), [])
+
+    def test_caps_at_three(self) -> None:
+        # Topics overlapping four shards.
+        fm = {"topics": ["paper-reading", "memory-ingestion", "market", "git"]}
+        result = generate_route_candidates(fm)
+        self.assertLessEqual(len(result), 3)
+
+
+class TestCapacitySignals(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / "catalog-shards").mkdir()
+        (self.root / "proposals").mkdir()
+        (self.root / "manager-ledger.md").write_text(
+            "# Memory Manager Ledger\n", encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_misc_signal_emits_at_threshold_and_not_re_emits(self) -> None:
+        signals = check_and_emit_capacity_signals(
+            self.root,
+            misc_card_count=MISC_SOFT_THRESHOLD,
+            total_card_count=0,
+            pending_proposal_count=0,
+        )
+        self.assertEqual(len(signals), 1)
+        self.assertIn("misc-shard at 15", signals[0])
+
+        # Second call with the count still above threshold: no re-emit.
+        signals2 = check_and_emit_capacity_signals(
+            self.root,
+            misc_card_count=MISC_SOFT_THRESHOLD + 1,
+            total_card_count=0,
+            pending_proposal_count=0,
+        )
+        self.assertEqual(signals2, [])
+
+    def test_catalog_phase2_signal(self) -> None:
+        signals = check_and_emit_capacity_signals(
+            self.root,
+            misc_card_count=0,
+            total_card_count=CATALOG_PHASE2_THRESHOLD,
+            pending_proposal_count=0,
+        )
+        self.assertEqual(len(signals), 1)
+        self.assertIn("catalog at 500", signals[0])
+
+    def test_proposal_review_signal(self) -> None:
+        signals = check_and_emit_capacity_signals(
+            self.root,
+            misc_card_count=0,
+            total_card_count=0,
+            pending_proposal_count=PROPOSAL_REVIEW_THRESHOLD,
+        )
+        self.assertEqual(len(signals), 1)
+        self.assertIn("10 proposals pending", signals[0])
+
+    def test_below_threshold_emits_nothing(self) -> None:
+        signals = check_and_emit_capacity_signals(
+            self.root,
+            misc_card_count=MISC_SOFT_THRESHOLD - 1,
+            total_card_count=CATALOG_PHASE2_THRESHOLD - 1,
+            pending_proposal_count=PROPOSAL_REVIEW_THRESHOLD - 1,
+        )
+        self.assertEqual(signals, [])
+
+
+class TestProcessRouteProposals(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.shards = self.root / "catalog-shards"
+        self.shards.mkdir()
+        self.proposals = self.root / "proposals"
+        self.proposals.mkdir()
+
+        # Minimal index with misc and paper-reading blocks.
+        (self.root / "catalog-index.md").write_text(
+            """# Memory Catalog Index
+
+## Registered projects
+
+## Shards
+
+### paper-reading
+- path: catalog-shards/paper-reading.md
+- description: paper-reader pipeline.
+- stable_tags: [paper-reader]
+- card_count: 0
+- last_updated:
+
+### misc
+- path: catalog-shards/misc.md
+- description: Quarantine.
+- stable_tags: [misc]
+- card_count: 2
+- last_updated:
+""",
+            encoding="utf-8",
+        )
+
+        # Seed misc with two cards.
+        misc_text = (
+            "# Catalog Shard — misc\n\n"
+            "Searchable memory cards routed to misc.\n\n"
+            "## Generated Entries\n\n"
+            "## card-one\n\n"
+            "- path: memories/long-term/card-one.md\n"
+            "- topics: [paper-reading]\n"
+            "- updated: 2026-04-22\n\n"
+            "## card-two\n\n"
+            "- path: memories/long-term/card-two.md\n"
+            "- topics: [paper-reading]\n"
+            "- updated: 2026-04-22\n\n"
+            "## Manual Entries\n"
+        )
+        (self.shards / "misc.md").write_text(misc_text, encoding="utf-8")
+
+        # Empty paper-reading shard.
+        (self.shards / "paper-reading.md").write_text(
+            SHARD_HEADER_TEMPLATE.format(name="paper-reading"),
+            encoding="utf-8",
+        )
+
+        # Two ROUTE-* proposals with the paper-reading option pre-checked.
+        def _proposal(slug: str) -> str:
+            return (
+                f"# Proposed Route: {slug}\n\n"
+                f"- created_at: 2026-04-23T10:00:00-07:00\n"
+                f"- proposal_type: route_ambiguous_card\n"
+                f"- card_slug: {slug}\n"
+                f"- card_path: memories/long-term/{slug}.md\n"
+                f"- current_shard: catalog-shards/misc.md\n"
+                f"- source_experience: experiences/demo.md\n"
+                f"- reason: test fixture\n\n"
+                f"## Routing signals\n\n"
+                f"- type: project-pattern\n"
+                f"- topics: paper-reading\n"
+                f"- projects: (none)\n\n"
+                f"## Candidate shards\n\n"
+                f"- [x] catalog-shards/paper-reading.md — partial overlap\n"
+                f"- [ ] confirm misc\n\n"
+                f"## User decision\n"
+            )
+
+        (self.proposals / "ROUTE-card-one-2026-04-23.md").write_text(
+            _proposal("card-one"), encoding="utf-8"
+        )
+        (self.proposals / "ROUTE-card-two-2026-04-23.md").write_text(
+            _proposal("card-two"), encoding="utf-8"
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_maintenance_moves_cards_and_archives_proposals(self) -> None:
+        results = process_route_proposals(self.root, interactive=False)
+        self.assertEqual(len(results), 2)
+        for r in results:
+            self.assertEqual(r["action"], "moved_to:paper-reading.md")
+
+        # misc shard emptied.
+        misc_text = (self.shards / "misc.md").read_text()
+        self.assertNotIn("## card-one", misc_text)
+        self.assertNotIn("## card-two", misc_text)
+
+        # paper-reading gained them.
+        paper_text = (self.shards / "paper-reading.md").read_text()
+        self.assertIn("## card-one", paper_text)
+        self.assertIn("## card-two", paper_text)
+
+        # index updated.
+        index_text = (self.root / "catalog-index.md").read_text()
+        # misc card_count should now be 0; paper-reading should be 2.
+        misc_block = index_text.split("### misc", 1)[1]
+        self.assertIn("- card_count: 0", misc_block)
+        paper_block = index_text.split("### paper-reading", 1)[1].split("###", 1)[0]
+        self.assertIn("- card_count: 2", paper_block)
+
+        # proposal files moved to resolved/YYYY-MM/.
+        self.assertFalse(list(self.proposals.glob("ROUTE-*.md")))
+        resolved_files = list((self.proposals / "resolved").rglob("ROUTE-*.md"))
+        self.assertEqual(len(resolved_files), 2)
+        for p in resolved_files:
+            self.assertIn("resolution: moved_to:paper-reading.md", p.read_text())
+
+
 if __name__ == "__main__":
     # Run both the SKILL.md script test and the unittest suites.
     try:
@@ -394,6 +663,10 @@ if __name__ == "__main__":
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestRouteCard))
     suite.addTests(loader.loadTestsFromTestCase(TestShardWriteAndIndexUpdate))
+    suite.addTests(loader.loadTestsFromTestCase(TestFileRouteProposal))
+    suite.addTests(loader.loadTestsFromTestCase(TestGenerateRouteCandidates))
+    suite.addTests(loader.loadTestsFromTestCase(TestCapacitySignals))
+    suite.addTests(loader.loadTestsFromTestCase(TestProcessRouteProposals))
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
     raise SystemExit(0 if result.wasSuccessful() else 1)

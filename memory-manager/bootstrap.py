@@ -14,11 +14,12 @@ catalog regenerator.
 import argparse
 import re
 import sys
-from datetime import date as _date_cls
+from datetime import date as _date_cls, datetime as _datetime_cls
 from pathlib import Path
 
 DIRECTORIES = [
     "proposals",
+    "proposals/resolved",
     "long-term",
     "short-term",
     "archive",
@@ -26,6 +27,14 @@ DIRECTORIES = [
     "workflow-templates/_shared",
     "catalog-shards",
 ]
+
+# ---------------------------------------------------------------------------
+# Capacity-signal thresholds
+# ---------------------------------------------------------------------------
+
+MISC_SOFT_THRESHOLD = 15
+CATALOG_PHASE2_THRESHOLD = 500
+PROPOSAL_REVIEW_THRESHOLD = 10
 
 PLACEHOLDER_AGENTS = """\
 ---
@@ -421,8 +430,8 @@ def write_entry_to_shard(
 _INDEX_BLOCK_RE = re.compile(
     r"(### (?P<name>[A-Za-z0-9_-]+)\n"
     r"(?:-[^\n]*\n)*?)"
-    r"(- card_count:\s*[^\n]*\n)"
-    r"(- last_updated:\s*[^\n]*)",
+    r"(- card_count:[^\n]*\n)"
+    r"(- last_updated:[^\n]*)",
     re.MULTILINE,
 )
 
@@ -469,6 +478,494 @@ def update_index_for_shard(memory_root: Path, shard_name: str) -> None:
 
     new_index = _INDEX_BLOCK_RE.sub(_replace, index_content)
     index_path.write_text(new_index, encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Route-proposal filing
+# ---------------------------------------------------------------------------
+
+
+_ROUTE_PROPOSAL_TEMPLATE = """\
+# Proposed Route: {slug}
+
+- created_at: {created_at}
+- proposal_type: route_ambiguous_card
+- card_slug: {slug}
+- card_path: {card_path}
+- current_shard: catalog-shards/misc.md
+- source_experience: {source_experience}
+- reason: Routing rules produced no match; card defaulted to misc.
+
+## Routing signals
+
+- type: {type_}
+- topics: {topics}
+- projects: {projects}
+
+## Candidate shards
+
+The manager's shortlist of plausible shards with rationale per shard:
+
+{candidate_lines}
+
+## User decision
+
+<!-- Check exactly one option above during an interactive memory-manager run. The manager reads this block and acts. -->
+"""
+
+
+def _format_candidate_line(shard: str, rationale: str) -> str:
+    if shard == "__new_shard__":
+        return f"- [ ] propose new shard: {rationale}"
+    if shard == "__confirm_misc__":
+        return "- [ ] confirm misc (no clear shard; card stays in misc pending periodic review)"
+    return f"- [ ] catalog-shards/{shard} — {rationale}"
+
+
+def file_route_proposal(
+    card: dict,
+    candidates: list[tuple[str, str]],
+    *,
+    proposals_dir: Path,
+    now: _datetime_cls | None = None,
+) -> Path:
+    """Write ``memories/proposals/ROUTE-<slug>-<date>.md`` for an ambiguous card.
+
+    ``card`` is the card frontmatter plus at least ``slug`` and ``card_path``
+    (the destination of the note body) and optional ``source_experience``.
+    ``candidates`` is a list of ``(shard_name, rationale)`` tuples; use the
+    sentinel shard name ``"__new_shard__"`` for a "propose new shard" line and
+    ``"__confirm_misc__"`` for the explicit confirm-misc option. The function
+    always appends a final ``confirm misc`` line if one is not already present
+    in ``candidates``.
+    """
+    proposals_dir.mkdir(parents=True, exist_ok=True)
+    now_dt = now or _datetime_cls.now().astimezone()
+    slug = str(card.get("slug", "")).strip()
+    if not slug:
+        raise ValueError("card must include a non-empty 'slug'")
+    date_str = now_dt.date().isoformat()
+    target = proposals_dir / f"ROUTE-{slug}-{date_str}.md"
+
+    # Ensure confirm-misc sentinel is present.
+    has_confirm = any(s == "__confirm_misc__" for s, _ in candidates)
+    full_candidates = list(candidates)
+    if not has_confirm:
+        full_candidates.append(("__confirm_misc__", ""))
+
+    candidate_lines = "\n".join(
+        _format_candidate_line(s, r) for s, r in full_candidates
+    )
+
+    type_ = str(card.get("type", "")).strip()
+    topics = _as_list(card.get("topics"))
+    projects = _as_list(card.get("projects"))
+
+    body = _ROUTE_PROPOSAL_TEMPLATE.format(
+        slug=slug,
+        created_at=now_dt.isoformat(timespec="seconds"),
+        card_path=str(card.get("card_path", f"memories/long-term/{slug}.md")),
+        source_experience=str(card.get("source_experience", "unknown")),
+        type_=type_ or "(unspecified)",
+        topics=", ".join(topics) if topics else "(none)",
+        projects=", ".join(projects) if projects else "(none)",
+        candidate_lines=candidate_lines,
+    )
+    target.write_text(body, encoding="utf-8")
+    return target
+
+
+# ---------------------------------------------------------------------------
+# Route-candidate diagnostic pass
+# ---------------------------------------------------------------------------
+
+
+# Approximate topic signatures for each shard. Used by ``generate_route_candidates``
+# to produce a "near match" shortlist for cards that routed to misc. Keep these
+# in rough parity with the ladder in ``route_card`` but intentionally looser
+# (single-topic overlap is enough to surface a shard as a candidate).
+_SHARD_TOPIC_SIGNATURES: dict[str, set[str]] = {
+    "paper-reading.md": {"paper-reading", "paper-reader", "paper-discovery", "paper-review"},
+    "memory-system.md": {"memory-ingestion", "retrieval", "catalog", "memory", "experience-logger", "knowledge-maester"},
+    "market-ops.md": {"market-watcher", "portfolio", "ticker", "market"},
+    "tooling-ops.md": {"credential-broker", "env-vars", "secret-handling", "git"},
+    "session-ops.md": {"research-meeting", "session-handoff", "session-continuity"},
+    "skill-ops.md": {"skill-design", "skill-testing", "skill-onboarding", "strangler-fig", "skill"},
+    "agent-ops.md": {"agent-ops", "preflight", "paper-trail", "safety"},
+    "writing-style.md": {"writing", "manuscript", "review", "academic-writing"},
+}
+
+
+_SHARD_RATIONALES: dict[str, str] = {
+    "paper-reading.md": "partial topic overlap with paper-reading shard",
+    "memory-system.md": "partial topic overlap with memory-system shard",
+    "market-ops.md": "partial topic overlap with market-ops shard",
+    "tooling-ops.md": "partial topic overlap with tooling-ops shard",
+    "session-ops.md": "partial topic overlap with session-ops shard",
+    "skill-ops.md": "partial topic overlap with skill-ops shard",
+    "agent-ops.md": "partial topic overlap with agent-ops shard",
+    "writing-style.md": "partial topic overlap with writing-style shard",
+}
+
+
+def generate_route_candidates(frontmatter: dict) -> list[tuple[str, str]]:
+    """Return up to 3 plausible shards (and rationales) for a misc-routed card.
+
+    The routing ladder in ``route_card`` is first-match-wins; a ``misc`` result
+    means no rule fired cleanly. For each topic-signature shard above, compute
+    overlap with the card's topics and surface the top matches. Returns an
+    empty list when no overlap exists (caller should still include a confirm
+    misc line via the template).
+    """
+    topics = _as_list(frontmatter.get("topics"))
+    topics_l = {t.lower() for t in topics}
+    if not topics_l:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    for shard, sig in _SHARD_TOPIC_SIGNATURES.items():
+        overlap = len(topics_l & sig)
+        if overlap > 0:
+            scored.append((overlap, shard))
+    scored.sort(key=lambda t: (-t[0], t[1]))
+
+    return [(shard, _SHARD_RATIONALES[shard]) for _, shard in scored[:3]]
+
+
+# ---------------------------------------------------------------------------
+# Capacity-signal emission
+# ---------------------------------------------------------------------------
+
+
+_LEDGER_SIGNAL_RE = re.compile(
+    r"^- signal_last_emitted_(misc|catalog|proposals):\s*(\d+)\s*$",
+    re.MULTILINE,
+)
+
+
+def _parse_last_emitted(ledger_text: str) -> dict[str, int]:
+    out = {"misc": 0, "catalog": 0, "proposals": 0}
+    for m in _LEDGER_SIGNAL_RE.finditer(ledger_text):
+        out[m.group(1)] = int(m.group(2))
+    return out
+
+
+def _update_last_emitted(ledger_text: str, updates: dict[str, int]) -> str:
+    """Return ``ledger_text`` with ``signal_last_emitted_*`` fields updated.
+
+    The fields live in a ``## Capacity Signal State`` section at the end of the
+    ledger; if the section is absent it is appended.
+    """
+    # Remove existing lines.
+    new_text = _LEDGER_SIGNAL_RE.sub("", ledger_text)
+    # Collapse any blank-line runs left behind.
+    new_text = re.sub(r"\n{3,}", "\n\n", new_text).rstrip() + "\n"
+
+    section_header = "## Capacity Signal State"
+    lines = [
+        f"- signal_last_emitted_misc: {updates.get('misc', 0)}",
+        f"- signal_last_emitted_catalog: {updates.get('catalog', 0)}",
+        f"- signal_last_emitted_proposals: {updates.get('proposals', 0)}",
+    ]
+    if section_header in new_text:
+        # Replace the section's body.
+        before, _, _ = new_text.partition(section_header)
+        new_text = (
+            before.rstrip()
+            + "\n\n"
+            + section_header
+            + "\n\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+    else:
+        new_text = (
+            new_text.rstrip()
+            + "\n\n"
+            + section_header
+            + "\n\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+    return new_text
+
+
+def check_and_emit_capacity_signals(
+    memory_root: Path,
+    *,
+    misc_card_count: int | None = None,
+    total_card_count: int | None = None,
+    pending_proposal_count: int | None = None,
+    write_ledger: bool = True,
+) -> list[str]:
+    """Return capacity-signal lines for thresholds that transited upward.
+
+    Counts may be supplied explicitly (for tests and dry runs); when omitted
+    they are computed from the vault on disk. When ``write_ledger`` is True,
+    the ledger's "last emitted at count" fields are refreshed so the same
+    threshold is not re-emitted on the next ingestion.
+    """
+    shards_dir = memory_root / "catalog-shards"
+    proposals_dir = memory_root / "proposals"
+
+    if misc_card_count is None:
+        misc_path = shards_dir / "misc.md"
+        if misc_path.exists():
+            misc_text = misc_path.read_text(encoding="utf-8")
+            misc_card_count = sum(
+                1 for m in _SLUG_HEADING_RE.finditer(misc_text)
+                if m.group(1).strip() not in ("Generated Entries", "Manual Entries")
+            )
+        else:
+            misc_card_count = 0
+
+    if total_card_count is None:
+        total_card_count = 0
+        if shards_dir.exists():
+            for shard_file in shards_dir.glob("*.md"):
+                shard_text = shard_file.read_text(encoding="utf-8")
+                total_card_count += sum(
+                    1 for m in _SLUG_HEADING_RE.finditer(shard_text)
+                    if m.group(1).strip() not in ("Generated Entries", "Manual Entries")
+                )
+
+    if pending_proposal_count is None:
+        if proposals_dir.exists():
+            pending_proposal_count = sum(
+                1 for p in proposals_dir.glob("*.md") if not p.name.startswith(".")
+            )
+        else:
+            pending_proposal_count = 0
+
+    ledger_path = memory_root / "manager-ledger.md"
+    ledger_text = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else ""
+    last_emitted = _parse_last_emitted(ledger_text)
+
+    signals: list[str] = []
+    new_state = dict(last_emitted)
+
+    # Misc threshold: emit when crossing upward from below the threshold.
+    if misc_card_count >= MISC_SOFT_THRESHOLD and last_emitted["misc"] < MISC_SOFT_THRESHOLD:
+        signals.append(
+            f"[SIGNAL] misc-shard at {misc_card_count} cards — "
+            f"consider a maintenance review to re-home or archive."
+        )
+        new_state["misc"] = misc_card_count
+    elif misc_card_count < MISC_SOFT_THRESHOLD:
+        new_state["misc"] = misc_card_count
+
+    # Phase-2 catalog threshold.
+    if total_card_count >= CATALOG_PHASE2_THRESHOLD and last_emitted["catalog"] < CATALOG_PHASE2_THRESHOLD:
+        signals.append(
+            f"[SIGNAL] catalog at {total_card_count} cards — "
+            f"consider Phase 2 (derived frontmatter query index; see "
+            f"memory-retriever-improvement project for design)."
+        )
+        new_state["catalog"] = total_card_count
+    elif total_card_count < CATALOG_PHASE2_THRESHOLD:
+        new_state["catalog"] = total_card_count
+
+    # Proposal review threshold.
+    if pending_proposal_count >= PROPOSAL_REVIEW_THRESHOLD and last_emitted["proposals"] < PROPOSAL_REVIEW_THRESHOLD:
+        signals.append(
+            f"[SIGNAL] {pending_proposal_count} proposals pending — "
+            f"run memory-manager in approval_mode to resolve."
+        )
+        new_state["proposals"] = pending_proposal_count
+    elif pending_proposal_count < PROPOSAL_REVIEW_THRESHOLD:
+        new_state["proposals"] = pending_proposal_count
+
+    if write_ledger and (signals or new_state != last_emitted):
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        ledger_text = ledger_text or "# Memory Manager Ledger\n"
+        ledger_path.write_text(_update_last_emitted(ledger_text, new_state), encoding="utf-8")
+
+    return signals
+
+
+# ---------------------------------------------------------------------------
+# Route-proposal maintenance processing
+# ---------------------------------------------------------------------------
+
+
+_CHECKED_BOX_RE = re.compile(r"^- \[[xX]\] (.+)$", re.MULTILINE)
+
+
+def _parse_route_proposal(text: str) -> dict:
+    """Return {slug, card_path, chosen} for a ROUTE proposal file.
+
+    ``chosen`` is one of:
+      - ``{"kind": "shard", "shard": "<name>.md"}``
+      - ``{"kind": "new_shard", "name": "<name>"}``
+      - ``{"kind": "confirm_misc"}``
+      - ``None`` if no checkbox is checked.
+    """
+    slug = ""
+    card_path = ""
+    for m in re.finditer(r"^- card_slug:\s*(\S+)", text, re.MULTILINE):
+        slug = m.group(1).strip()
+        break
+    for m in re.finditer(r"^- card_path:\s*(\S+)", text, re.MULTILINE):
+        card_path = m.group(1).strip()
+        break
+
+    chosen = None
+    checked = _CHECKED_BOX_RE.search(text)
+    if checked:
+        payload = checked.group(1).strip()
+        if payload.startswith("catalog-shards/"):
+            shard = payload.split(" ", 1)[0][len("catalog-shards/"):]
+            chosen = {"kind": "shard", "shard": shard}
+        elif payload.startswith("propose new shard:"):
+            name = payload[len("propose new shard:"):].split("—", 1)[0].strip()
+            chosen = {"kind": "new_shard", "name": name}
+        elif payload.startswith("confirm misc"):
+            chosen = {"kind": "confirm_misc"}
+    return {"slug": slug, "card_path": card_path, "chosen": chosen}
+
+
+def _move_card_between_shards(
+    shards_dir: Path,
+    slug: str,
+    source_shard: str,
+    dest_shard: str,
+) -> None:
+    """Remove the ``## <slug>`` block from ``source_shard`` and append to ``dest_shard``."""
+    source_path = shards_dir / source_shard
+    if not source_path.exists():
+        return
+    content = source_path.read_text(encoding="utf-8")
+    header, generated, manual = _split_shard(content)
+
+    # Find and extract the slug entry.
+    matches = list(_SLUG_HEADING_RE.finditer(generated))
+    entry_text = None
+    new_generated_parts = []
+    last = 0
+    for i, m in enumerate(matches):
+        s = m.group(1).strip()
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(generated)
+        if s == slug:
+            entry_text = generated[start:end]
+            new_generated_parts.append(generated[last:start])
+            last = end
+    new_generated_parts.append(generated[last:])
+    new_generated = "".join(new_generated_parts)
+
+    # Write source back.
+    source_new = header + "## Generated Entries" + new_generated + "## Manual Entries" + manual
+    source_path.write_text(source_new.rstrip() + "\n", encoding="utf-8")
+
+    if entry_text is None:
+        return
+
+    # Append to destination shard.
+    write_entry_to_shard(shards_dir, dest_shard, slug, entry_text)
+
+
+def _create_empty_shard(
+    memory_root: Path,
+    shard_filename: str,
+    description_placeholder: str = "TODO: describe shard purpose",
+) -> None:
+    """Create an empty shard file and add a minimal block to ``catalog-index.md``."""
+    shards_dir = memory_root / "catalog-shards"
+    shard_path = shards_dir / shard_filename
+    if not shard_path.exists():
+        shard_path.write_text(
+            SHARD_HEADER_TEMPLATE.format(name=shard_filename[:-3]),
+            encoding="utf-8",
+        )
+
+    index_path = memory_root / "catalog-index.md"
+    if not index_path.exists():
+        return
+    index_text = index_path.read_text(encoding="utf-8")
+    block_name = shard_filename[:-3]
+    if f"### {block_name}\n" in index_text:
+        return
+    new_block = (
+        f"\n### {block_name}\n"
+        f"- path: catalog-shards/{shard_filename}\n"
+        f"- description: {description_placeholder}\n"
+        f"- stable_tags: []\n"
+        f"- card_count: 0\n"
+        f"- last_updated: \n"
+    )
+    index_path.write_text(index_text.rstrip() + "\n" + new_block, encoding="utf-8")
+
+
+def process_route_proposals(
+    memory_root: Path,
+    *,
+    interactive: bool = True,
+    user_choice: "callable | None" = None,
+) -> list[dict]:
+    """Process pending ROUTE-* proposals under ``memories/proposals/``.
+
+    ``user_choice`` is a callable ``(proposal_path, parsed) -> dict`` that
+    returns the same ``chosen`` shape as ``_parse_route_proposal``. If
+    omitted and ``interactive=True``, the function reads the checked box from
+    the proposal file itself (i.e. the user has already edited the proposal
+    file to check one option). If no box is checked, the proposal is skipped
+    and reported.
+
+    Returns a list of per-proposal result dicts.
+    """
+    proposals_dir = memory_root / "proposals"
+    resolved_root = proposals_dir / "resolved"
+    shards_dir = memory_root / "catalog-shards"
+    if not proposals_dir.exists():
+        return []
+
+    proposal_files = sorted(
+        [p for p in proposals_dir.glob("ROUTE-*.md") if p.is_file()]
+    )
+    results: list[dict] = []
+    for path in proposal_files:
+        text = path.read_text(encoding="utf-8")
+        parsed = _parse_route_proposal(text)
+        if user_choice is not None:
+            chosen = user_choice(path, parsed)
+        else:
+            chosen = parsed["chosen"]
+        slug = parsed["slug"]
+        if chosen is None or not slug:
+            results.append({"path": str(path), "slug": slug, "action": "skipped", "reason": "no checked option or missing slug"})
+            continue
+
+        action = None
+        if chosen["kind"] == "shard":
+            dest = chosen["shard"]
+            _move_card_between_shards(shards_dir, slug, "misc.md", dest)
+            update_index_for_shard(memory_root, "misc.md")
+            update_index_for_shard(memory_root, dest)
+            action = f"moved_to:{dest}"
+        elif chosen["kind"] == "new_shard":
+            new_name = chosen["name"]
+            if not new_name.endswith(".md"):
+                new_name = new_name + ".md"
+            _create_empty_shard(memory_root, new_name)
+            _move_card_between_shards(shards_dir, slug, "misc.md", new_name)
+            update_index_for_shard(memory_root, "misc.md")
+            update_index_for_shard(memory_root, new_name)
+            action = f"moved_to_new_shard:{new_name}"
+        elif chosen["kind"] == "confirm_misc":
+            action = "confirmed_misc"
+
+        # Move proposal file to resolved/YYYY-MM/
+        yyyy_mm = _datetime_cls.now().strftime("%Y-%m")
+        resolved_dir = resolved_root / yyyy_mm
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+        resolution_note = f"\n\n- resolution: {action}\n"
+        path.write_text(text.rstrip() + resolution_note, encoding="utf-8")
+        target = resolved_dir / path.name
+        path.rename(target)
+
+        results.append({"path": str(target), "slug": slug, "action": action})
+
+    return results
 
 
 def bootstrap(memory_root: Path, *, force: bool = False, dry_run: bool = False) -> int:
