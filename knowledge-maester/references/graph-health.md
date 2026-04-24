@@ -20,7 +20,7 @@ Resolution options:
 
 A note with neither incoming nor outgoing `[[wiki-links]]`.
 
-- Exceptions: `_index.md`, `_dashboard.md`, `_catalog.md`, and any note in `templates/`.
+- Exceptions: `_index.md`, `_dashboard.md`, `_catalog.md`, `catalog-index.md`, any file under `catalog-shards/`, and any note in `templates/`.
 - Severity: **WARNING**
 
 Resolution: Add a link from or to a related note.

@@ -138,7 +138,7 @@ python3 knowledge-maester/scripts/check_graph.py \
 python3 knowledge-maester/scripts/generate_index.py \
   [--vault-path PATH]
 
-# Regenerate memory catalog
+# Regenerate memory catalog (sharded: catalog-index.md + catalog-shards/<shard>.md)
 python3 knowledge-maester/scripts/generate_memory_catalog.py \
   [--vault-path PATH] [--output PATH]
 
@@ -255,7 +255,7 @@ For memory-system operations, pass `--vault-path` to target `~/Documents/memory/
 Supported memory-vault operations:
 - `ingest_memory.py` — create or update D1-schema memory notes in `long-term/` or `short-term/`
 - `check_graph.py --schema memory` — validate memory-vault graph health and frontmatter types
-- `generate_memory_catalog.py` — regenerate the hybrid memory catalog
+- `generate_memory_catalog.py` — regenerate the sharded memory catalog (`catalog-index.md` + `catalog-shards/<shard>.md`)
 
 This memory-vault support is separate from Citadel ingestion paths such as `market/`, `literature/`, and `reference/`.
 

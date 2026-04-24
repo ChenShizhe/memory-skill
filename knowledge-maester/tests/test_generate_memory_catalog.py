@@ -1,5 +1,5 @@
 """
-Unit tests for generate_memory_catalog.py.
+Unit tests for generate_memory_catalog.py (sharded layout).
 
 Run:
   python3 -m pytest knowledge-maester/tests/test_generate_memory_catalog.py -v
@@ -17,6 +17,21 @@ import vault_io
 from generate_memory_catalog import generate_catalog
 
 
+_SLUG_HEADING_RE = re.compile(r"^## ([^\n]+)$", re.MULTILINE)
+
+
+def _collect_slugs(shards_dir: Path) -> list[str]:
+    slugs = []
+    for shard_file in sorted(shards_dir.glob("*.md")):
+        text = shard_file.read_text(encoding="utf-8")
+        for m in _SLUG_HEADING_RE.finditer(text):
+            s = m.group(1).strip()
+            if s in ("Generated Entries", "Manual Entries"):
+                continue
+            slugs.append(s)
+    return slugs
+
+
 class TestGenerateMemoryCatalog(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -31,17 +46,11 @@ class TestGenerateMemoryCatalog(unittest.TestCase):
     def _write_note(self, rel_path: str, fm: dict, body: str) -> None:
         vault_io.write_note(self.vault, rel_path, fm, body)
 
-    def _read_catalog(self) -> str:
-        return (self.vault / "catalog.md").read_text(encoding="utf-8")
+    def _read_index(self) -> str:
+        return (self.vault / "catalog-index.md").read_text(encoding="utf-8")
 
-    @staticmethod
-    def _generated_slugs(catalog: str) -> list[str]:
-        marker = "## Generated Entries"
-        if marker not in catalog:
-            return []
-        generated_text = catalog.split(marker, 1)[1]
-        generated_text = generated_text.split("## Manual Entries", 1)[0]
-        return re.findall(r"^##\s+([^\n]+)$", generated_text, flags=re.MULTILINE)
+    def _read_shard(self, shard_filename: str) -> str:
+        return (self.vault / "catalog-shards" / shard_filename).read_text(encoding="utf-8")
 
     def test_generate_catalog_with_temp_vault_notes(self):
         self._write_note(
@@ -131,26 +140,39 @@ Operational summary.
         )
 
         count = generate_catalog(self.vault)
-        self.assertEqual(count, 8)  # 4 core + alpha + beta + hub + manager-ledger
+        # 4 core + alpha + beta + hub + manager-ledger
+        self.assertEqual(count, 8)
 
-        catalog = self._read_catalog()
-        self.assertIn("## alpha-note", catalog)
-        self.assertIn("- path: memories/long-term/alpha-note.md", catalog)
-        self.assertIn("- summary: First line of summary.", catalog)
-        self.assertIn("- topics: [alpha, memory]", catalog)
-        self.assertIn("## _hub-memory", catalog)
-        self.assertIn("## manager-ledger", catalog)
+        # All slugs should be present across shards.
+        slugs = _collect_slugs(self.vault / "catalog-shards")
+        self.assertIn("alpha-note", slugs)
+        self.assertIn("beta-note", slugs)
+        self.assertIn("_hub-memory", slugs)
+        self.assertIn("manager-ledger", slugs)
+        self.assertIn("agents-core-protocol", slugs)
+
+        # Hub routed to hubs shard.
+        self.assertIn("## _hub-memory", self._read_shard("hubs.md"))
+
+        # Core identity entries routed to core-identity.
+        core = self._read_shard("core-identity.md")
+        self.assertIn("## agents-core-protocol", core)
+        self.assertIn("## user-core-profile", core)
 
     def test_manual_entries_section_preserved_verbatim(self):
-        initial_catalog = """# Searchable Memory Catalog
+        # Seed two shards with hand-edited Manual content.
+        shards = self.vault / "catalog-shards"
+        shards.mkdir(parents=True)
+        (shards / "misc.md").write_text(
+            """# Catalog Shard — misc
 
-This catalog tracks all searchable central memory that `memory-retriever` may use.
+(intro)
 
 ## Generated Entries
 
-## alpha-old
+## old-generated-entry
 
-- path: memories/long-term/alpha-old.md
+- path: memories/long-term/old-generated-entry.md
 
 ## Manual Entries
 
@@ -161,34 +183,39 @@ Manual line 1.
 
 - path: memories/custom.md
 - note: keep spacing exactly
-"""
-        (self.vault / "catalog.md").write_text(initial_catalog, encoding="utf-8")
+""",
+            encoding="utf-8",
+        )
 
         self._write_note(
-            "long-term/alpha-note.md",
+            "long-term/some-note.md",
             {
-                "title": "Alpha Note",
+                "title": "Some Note",
                 "type": "workflow",
                 "layer": "long-term",
-                "topics": ["alpha"],
-                "projects": ["proj-a"],
+                "topics": ["unrelated"],
+                "projects": [],
                 "last_updated": "2026-03-16",
                 "priority": "high",
             },
-            """# Alpha
+            """# Some Note
 
 ## Summary
 
-Alpha summary.
+Some summary.
 """,
         )
 
         generate_catalog(self.vault)
-        catalog = self._read_catalog()
-        self.assertIn("\n\nManual line 1.\n- keep this bullet\n\n## custom-manual-entry\n", catalog)
-        self.assertIn("- note: keep spacing exactly", catalog)
+        misc = self._read_shard("misc.md")
+        self.assertIn("Manual line 1.", misc)
+        self.assertIn("- keep this bullet", misc)
+        self.assertIn("## custom-manual-entry", misc)
+        self.assertIn("- note: keep spacing exactly", misc)
+        # The old Generated entry should no longer be present (Generated is rewritten).
+        self.assertNotIn("## old-generated-entry", misc)
 
-    def test_core_identity_entries_appear_first(self):
+    def test_core_identity_entries_appear_in_core_identity_shard(self):
         self._write_note(
             "long-term/zeta-note.md",
             {
@@ -196,7 +223,7 @@ Alpha summary.
                 "type": "workflow",
                 "layer": "long-term",
                 "topics": ["zeta"],
-                "projects": ["proj-z"],
+                "projects": [],
                 "last_updated": "2026-03-16",
                 "priority": "high",
             },
@@ -209,18 +236,18 @@ Zeta summary.
         )
 
         generate_catalog(self.vault)
-        catalog = self._read_catalog()
-        slugs = self._generated_slugs(catalog)
-        self.assertGreaterEqual(len(slugs), 4)
-        self.assertEqual(
-            slugs[:4],
-            [
-                "agents-core-protocol",
-                "soul-core-principles",
-                "identity-core-boundaries",
-                "user-core-profile",
-            ],
-        )
+        core = self._read_shard("core-identity.md")
+        # All four core identity slugs present in this shard.
+        for slug in (
+            "## agents-core-protocol",
+            "## soul-core-principles",
+            "## identity-core-boundaries",
+            "## user-core-profile",
+        ):
+            self.assertIn(slug, core)
+        # Zeta goes to misc (no project, no matching topic).
+        misc = self._read_shard("misc.md")
+        self.assertIn("## zeta-note", misc)
 
     def test_template_files_are_skipped(self):
         self._write_note(
@@ -241,7 +268,6 @@ Zeta summary.
 Should be skipped.
 """,
         )
-
         self._write_note(
             "long-term/_hub-template.md",
             {
@@ -260,7 +286,6 @@ Should be skipped.
 Should be skipped.
 """,
         )
-
         self._write_note(
             "long-term/real-note.md",
             {
@@ -281,10 +306,66 @@ Real summary.
         )
 
         generate_catalog(self.vault)
-        catalog = self._read_catalog()
-        self.assertIn("## real-note", catalog)
-        self.assertNotIn("## _template", catalog)
-        self.assertNotIn("## _hub-template", catalog)
+        slugs = _collect_slugs(self.vault / "catalog-shards")
+        self.assertIn("real-note", slugs)
+        self.assertNotIn("_template", slugs)
+        self.assertNotIn("_hub-template", slugs)
+
+    def test_routing_determinism_for_paper_reading_topics(self):
+        self._write_note(
+            "long-term/deterministic-paper-note.md",
+            {
+                "title": "Paper Pipeline Note",
+                "type": "workflow",
+                "layer": "long-term",
+                "topics": ["paper-reading", "paper-discovery"],
+                "projects": [],
+                "last_updated": "2026-04-23",
+                "priority": "high",
+            },
+            """# Paper Pipeline Note
+
+## Summary
+
+Paper summary.
+""",
+        )
+        generate_catalog(self.vault)
+        paper_shard = self._read_shard("paper-reading.md")
+        self.assertIn("## deterministic-paper-note", paper_shard)
+
+    def test_dedup_manual_wins_on_regeneration(self):
+        # Seed a shard whose Manual already has a slug; generator writes an
+        # entry with the same slug to Generated. We verify both coexist in the
+        # shard (per D1, dedup happened during the migration; at regeneration
+        # time we keep Manual verbatim and rewrite Generated). This exercises
+        # the preservation contract, not the migration-time dedup.
+        shards = self.vault / "catalog-shards"
+        shards.mkdir(parents=True)
+        (shards / "core-identity.md").write_text(
+            """# Catalog Shard — core-identity
+
+(intro)
+
+## Generated Entries
+
+## Manual Entries
+
+## agents-core-protocol
+
+- path: memories/AGENTS.md
+- note: Manual wins
+""",
+            encoding="utf-8",
+        )
+        generate_catalog(self.vault)
+        core = self._read_shard("core-identity.md")
+        # Manual entry preserved verbatim.
+        self.assertIn("- note: Manual wins", core)
+        # Generated copy also present (the generator always writes core entries).
+        # The slug appears twice (once in Generated, once in Manual) in this file.
+        matches = re.findall(r"^## agents-core-protocol\s*$", core, re.MULTILINE)
+        self.assertEqual(len(matches), 2)
 
 
 if __name__ == "__main__":

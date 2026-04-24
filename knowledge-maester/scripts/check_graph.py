@@ -56,8 +56,15 @@ MEMORY_VALID_TYPES = {
 VALID_STATUSES = vault_io.VALID_STATUSES
 REQUIRED_FIELDS = {"type", "title", "date", "tags", "last_updated", "status"}
 MEMORY_REQUIRED_FIELDS = {"type", "title", "layer", "date", "last_updated", "status"}
-MEMORY_SKIP_DIRS = {".obsidian", "workflow-templates", "archive"}
-MEMORY_SKIP_FILES = {"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "catalog.md"}
+MEMORY_SKIP_DIRS = {".obsidian", "workflow-templates", "archive", "catalog-shards"}
+MEMORY_SKIP_FILES = {
+    "AGENTS.md",
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "catalog.md",
+    "catalog-index.md",
+}
 MEMORY_SKIP_STEMS = {"_template", "_hub-template"}
 
 

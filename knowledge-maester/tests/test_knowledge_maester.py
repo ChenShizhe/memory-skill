@@ -575,12 +575,26 @@ class TestCheckGraph(unittest.TestCase):
         note_names = {n.name for n in notes}
         self.assertNotIn("AGENTS.md", note_names)
 
-    def test_memory_schema_skips_generated_catalog(self):
+    def test_memory_schema_skips_catalog_and_shards(self):
         memory_vault = self.tmp_path / "memories"
         memory_vault.mkdir()
 
         (memory_vault / "catalog.md").write_text(
             "# Searchable Memory Catalog\n\n## Generated Entries\n",
+            encoding="utf-8",
+        )
+        (memory_vault / "catalog-index.md").write_text(
+            "# Memory Catalog Index\n\n## Shards\n",
+            encoding="utf-8",
+        )
+        shards_dir = memory_vault / "catalog-shards"
+        shards_dir.mkdir()
+        (shards_dir / "core-identity.md").write_text(
+            "# Catalog Shard — core-identity\n\n## Generated Entries\n\n## Manual Entries\n",
+            encoding="utf-8",
+        )
+        (shards_dir / "misc.md").write_text(
+            "# Catalog Shard — misc\n\n## Generated Entries\n\n## Manual Entries\n",
             encoding="utf-8",
         )
         vault_io.write_note(
@@ -593,6 +607,10 @@ class TestCheckGraph(unittest.TestCase):
         notes = collect_notes(memory_vault, schema="memory")
         note_names = {n.name for n in notes}
         self.assertNotIn("catalog.md", note_names)
+        self.assertNotIn("catalog-index.md", note_names)
+        # Shards are excluded via directory skip.
+        shard_paths = [n for n in notes if "catalog-shards" in str(n)]
+        self.assertEqual(shard_paths, [])
 
         report = check_graph(memory_vault, self.paper_bank, schema="memory")
         errors = [i for i in report["issues"] if i["severity"] == "ERROR"]

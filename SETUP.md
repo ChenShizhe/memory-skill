@@ -59,7 +59,8 @@ This creates:
 - `~/Documents/memory/IDENTITY.md` — system identity
 - `~/Documents/memory/USER.md` — user profile (edit this to describe yourself)
 - `~/Documents/memory/long-term/`, `short-term/`, `archive/` directories
-- `~/Documents/memory/catalog.md` — memory index
+- `~/Documents/memory/catalog-index.md` — thin shard manifest
+- `~/Documents/memory/catalog-shards/` — per-topic shard files
 
 **Done signal:** You should see `Bootstrap complete` in the output and `~/Documents/memory/AGENTS.md` should exist.
 

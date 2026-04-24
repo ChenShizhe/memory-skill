@@ -48,7 +48,7 @@ Core identity files loaded every session:
 - `USER.md` — user profile and preferences
 
 Plus searchable memory managed by memory-manager:
-- `long-term/` and `short-term/` — atomic notes indexed by `catalog.md`
+- `long-term/` and `short-term/` — atomic notes indexed via `catalog-index.md` (manifest) and per-topic files under `catalog-shards/`
 - `workflow-templates/` — learned workflow patterns
 - `archive/` — retired memory (not actively searched)
 
