@@ -20,14 +20,14 @@ Quota guidance is operational context, not retrieved memory.
   - `memories/IDENTITY.md`
   - `memories/USER.md`
 - Core-file injection into the expanded instruction is conditional on the auto-detection matrix (see Auto-Detection Logic). The pre-pass always reads the files for internal reasoning; injection is skipped when a handoff is present.
-- Use `memories/catalog.md` as the first shortlist source for non-core searchable memory.
+- Use `memories/catalog-index.md` as the first shortlist source, then open only the shortlisted shards under `memories/catalog-shards/` for non-core searchable memory.
 - Do not let the core-file pre-pass turn into general scanning of `memories/`.
 - Read `projects/<active-project>/domain-prior.md` only when it exists.
 - Read prior retrieval rounds only from the same project.
 - Write only inside `<resolved_project_root>/memory/` (see Path Resolution for how the project root is resolved).
 - Mid-session recall (`query` mode) does not write to disk. Results are returned inline only.
 - Never read raw files from `experiences/`.
-- Never read `memories/archive-catalog.md` or files under `memories/archive/`.
+- Never read `memories/archive-catalog.md` or files under `memories/archive/` (including `memories/archive/catalog-flat-*.md`).
 - Never convert quota state into memory cards.
 - Never modify files under `memories/`.
 
@@ -652,7 +652,8 @@ Mandatory core session files:
 
 Catalog-backed searchable memory:
 
-- `memories/catalog.md`
+- `memories/catalog-index.md` (shard manifest; always read first in Pass 1a)
+- `memories/catalog-shards/<shard>.md` (opened only for shortlisted shards in Pass 1b)
 - searchable long-term notes under `memories/long-term/` (atomic Obsidian notes)
 - searchable short-term notes under `memories/short-term/`
 - hub notes under `memories/long-term/_hub-*.md` (topic cluster indexes)
@@ -786,14 +787,17 @@ Then:
 
 ### Pass 1: Cheap Shortlist
 
-Read only:
+Pass 1 runs in two substeps.
 
-- current instruction
-- `projects/<active-project>/domain-prior.md` if present
-- `memories/catalog.md`
-- latest retrieval round in the same project, if present
+**Pass 1a — Shard selection.** Read only `memories/catalog-index.md` (never a shard file in this substep). For each shard listed:
 
-Shortlist by:
+1. Compute the number of `stable_tags` that overlap with the current task's topic set (topics extracted from the instruction text, the project's `domain-prior.md` topics, and any explicit topic cues in the user message).
+2. Award a keyword-match score from the shard `description` text against the instruction — case-insensitive whole-word matches on nouns; at most 1 point per overlap; cap at 3.
+3. Combined shard score = 2 × (stable_tag overlap) + (description keyword points).
+4. Shortlist the top 2–4 shards. Always include `core-identity` as a baseline shard unless a handoff is present and incremental retrieval is in effect (in which case core-identity can be skipped along with core-file injection).
+5. If no shard scores above zero on tag overlap (none have even one tag match), fall back to `{core-identity, misc}` and emit: `[WARNING] no shard matched task topics — falling back to core-identity + misc.`
+
+**Pass 1b — Focused read.** Open only the shortlisted shards. Score each card inside the opened shards using the existing per-card rules:
 
 - exact project match
 - topic overlap
@@ -803,11 +807,14 @@ Shortlist by:
 - whether prior retrieval already covered the same point
 - workflow template match (entries of `type: workflow_template` whose `workflow_type` topic matches the inferred task type)
 
-Hub shortcut rules:
+Read cards from both `## Generated Entries` and `## Manual Entries` subsections of each opened shard; both are valid retrieval sources.
 
-- use the hub shortcut when the task's topics match a hub's topics with overlap `>= 2`; otherwise use the standard catalog scan
+Hub shortcut rules (scoped to opened shards):
+
+- use the hub shortcut when the task's topics match a hub's topics with overlap `>= 2`; otherwise use the standard shard scan
 - when a hub entry (`type: hub`) is shortlisted, read its `## Members` section
 - add all member note slugs to the candidate shortlist
+- a hub's `## Members` section is followed only if the hub entry appeared in an opened shard
 - do not load the hub itself as a memory card; it is an index
 
 ### Pass 2: Focused Read
@@ -865,7 +872,7 @@ When a project task's instruction suggests a recognizable workflow type, the ret
 ### Matching Logic
 
 1. Read the current instruction and infer the likely workflow type based on task description, keywords, and project context.
-2. Check `memories/catalog.md` for entries of `type: workflow_template`.
+2. Check the `workflow-templates` shard at `memories/catalog-shards/workflow-templates.md` (routed via `catalog-index.md`) for entries of `type: workflow_template`.
 3. If a matching template exists, read the template file.
 4. If no template matches, note this in the expanded instruction (see Unrecognized Workflow below).
 
@@ -952,7 +959,7 @@ You may read:
 You must not:
 
 - read raw `experiences/` to estimate quota
-- add quota state to `memories/catalog.md`
+- add quota state to `memories/catalog-index.md` or any `memories/catalog-shards/<shard>.md`
 - emit quota state as `### Memory Card: ...`
 - let missing quota data block normal retrieval
 
@@ -1064,7 +1071,8 @@ Use this exact round-file shape:
   - memories/IDENTITY.md
   - memories/USER.md
 - catalog_considered:
-  - memories/catalog.md entry id ...
+  - memories/catalog-index.md shard: <shard-name>
+  - memories/catalog-shards/<shard>.md entry: <slug>
 - omitted:
   - ...
 
@@ -1185,7 +1193,7 @@ Mid-session recall is for topic-specific memory lookups during an active session
 
 ### Behavior
 
-1. Read `memories/catalog.md` and score entries solely by relevance to the `query` string.
+1. Read `memories/catalog-index.md` to shortlist 1–2 shards, then read those shards and score entries by relevance to the `query` string.
 2. Open at most `3` shortlisted searchable memory files.
 3. Extract only the guidance that directly addresses the query topic.
 4. Do not read or inject the mandatory core files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`).
@@ -1299,13 +1307,16 @@ Rules for the inline block:
   - continue best-effort with the remaining core files
   - record the missing file in `## Shortlist Summary`
   - note in `Execution Note` that the core baseline was partial
-- Missing `memories/catalog.md`:
+- Missing or unreadable `memories/catalog-index.md`:
   - continue with core baseline only
   - record that catalog-backed retrieval was unavailable
-  - skip non-core retrieval entirely
-- Empty `memories/catalog.md`:
+  - skip non-core retrieval entirely (same behavior as missing flat catalog today)
+- Empty `memories/catalog-index.md`:
   - continue with core baseline only
   - do not scan the `memories/` folder directly for non-core memory
+- Missing `memories/catalog-shards/` directory, or a shard file referenced by the index missing:
+  - emit a warning and note which shard was unreadable
+  - skip that shard and continue Pass 1b with the remaining shortlisted shards
 - Missing `domain-prior.md`:
   - continue without project-local context
 - No relevant searchable memory found:
@@ -1330,7 +1341,8 @@ The retriever must never silently degrade. Every missing or unreadable resource 
 | `memories/SOUL.md` missing or unreadable | **Warning** | Continue with remaining core files. Collect warning in Execution Note. |
 | `memories/IDENTITY.md` missing or unreadable | **Warning** | Continue with remaining core files. Collect warning in Execution Note. |
 | `memories/USER.md` missing or unreadable | **Warning** | Continue with remaining core files. Collect warning in Execution Note. |
-| `memories/catalog.md` missing or unreadable | **Warning** | Continue with core baseline only. Skip catalog-backed retrieval. Collect warning in Execution Note. |
+| `memories/catalog-index.md` missing or unreadable | **Warning** | Continue with core baseline only. Skip catalog-backed retrieval. Collect warning in Execution Note. |
+| `memories/catalog-shards/<shard>.md` missing or unreadable for a shortlisted shard | **Warning** | Skip the missing shard. Continue Pass 1b with remaining shortlisted shards. Collect warning in Execution Note. |
 | Resolved project root does not exist | **Warning** | Collect warning in Execution Note. |
 
 ### Fatal vs. Warning Distinction
@@ -1347,7 +1359,7 @@ All warnings must be collected and reported in the `### Execution Note` section 
 
 - **Retrieval warnings:**
   - [WARNING] memories/SOUL.md missing or unreadable — core baseline is partial.
-  - [WARNING] memories/catalog.md missing — catalog-backed retrieval skipped.
+  - [WARNING] memories/catalog-index.md missing — catalog-backed retrieval skipped.
 ```
 
 Each warning entry must state the missing resource and the degraded behavior applied. Warnings do not block the retrieval run; they ensure downstream agents can assess the completeness of the expanded instruction.
@@ -1358,7 +1370,7 @@ A good retrieval run:
 
 - never reads `experiences/`
 - starts with the mandatory core-file pre-pass
-- uses `memories/catalog.md` as the first shortlist source for non-core memory
+- uses `memories/catalog-index.md` as the first shortlist source, then opens only the shortlisted shards under `memories/catalog-shards/`
 - keeps the current instruction first
 - injects full core memory files first, then compact, justified catalog-derived memory cards
 - writes timestamped project-local trace files

@@ -72,12 +72,18 @@ def main() -> int:
     skill_md = read_text(ROOT / "memory-retriever/SKILL.md")
 
     # Integration tests: these require a configured workspace with live memory files.
-    catalog_path = ROOT / "memories/catalog.md"
-    if not catalog_path.exists():
-        print("SKIP: memories/catalog.md not found (integration test requires configured workspace)")
-        catalog_md = None
+    catalog_index_path = ROOT / "memories/catalog-index.md"
+    catalog_shards_dir = ROOT / "memories/catalog-shards"
+    if not catalog_index_path.exists():
+        print("SKIP: memories/catalog-index.md not found (integration test requires configured workspace)")
+        catalog_index_md = None
+        shard_bundle = None
     else:
-        catalog_md = read_text(catalog_path)
+        catalog_index_md = read_text(catalog_index_path)
+        shard_bundle = ""
+        if catalog_shards_dir.exists():
+            for shard_file in sorted(catalog_shards_dir.glob("*.md")):
+                shard_bundle += "\n" + read_text(shard_file)
     round_files = sorted((FIXTURE_ROOT / "memory/retrieval-rounds").glob("*.md"))
     if not round_files:
         raise AssertionError("Missing retrieval round fixture")
@@ -90,6 +96,18 @@ def main() -> int:
     assert_contains(skill_md, "## Retrieval Tiers", "retrieval tiers section")
     assert_contains(skill_md, "### Core File Pre-Pass", "core pre-pass section")
     assert_contains(skill_md, "### Pass 1: Cheap Shortlist", "pass 1 section")
+    assert_contains(skill_md, "**Pass 1a — Shard selection.**", "pass 1a substep")
+    assert_contains(skill_md, "**Pass 1b — Focused read.**", "pass 1b substep")
+    assert_contains(
+        skill_md,
+        "[WARNING] no shard matched task topics — falling back to core-identity + misc.",
+        "no-shard-match fallback warning",
+    )
+    assert_contains(
+        skill_md,
+        "Read cards from both `## Generated Entries` and `## Manual Entries` subsections",
+        "shard subsection read rule",
+    )
     assert_contains(skill_md, "### Pass 2: Focused Read", "pass 2 section")
     assert_contains(skill_md, "The retriever may also read `memories/provider-quotas.md` as a special operational source", "quota read exception")
     assert_contains(skill_md, "Quota guidance is an operational add-on to the handoff, not part of retrieved memory.", "quota guidance section")
@@ -104,9 +122,10 @@ def main() -> int:
     assert_contains(skill_md, "Every retrieval run must inject the entirety of each core file in this exact order:", "core full injection rule")
     assert_contains(skill_md, "- injection_mode: full_file_verbatim", "core injection mode")
     assert_contains(skill_md, "Do not summarize or paraphrase the mandatory core files.", "no core compression rule")
-    assert_contains(skill_md, "Use `memories/catalog.md` as the first shortlist source for non-core searchable memory.", "catalog-after-core rule")
+    assert_contains(skill_md, "Use `memories/catalog-index.md` as the first shortlist source, then open only the shortlisted shards under `memories/catalog-shards/` for non-core searchable memory.", "catalog-after-core rule")
     assert_contains(skill_md, "Missing or unreadable `memories/AGENTS.md`:", "agents hard fail rule")
-    assert_contains(skill_md, "Empty `memories/catalog.md`:", "empty catalog fallback")
+    assert_contains(skill_md, "Empty `memories/catalog-index.md`:", "empty catalog fallback")
+    assert_contains(skill_md, "Missing `memories/catalog-shards/` directory", "missing shard dir fallback")
     assert_contains(skill_md, "continue with core baseline only", "core-only fallback")
     assert_contains(skill_md, "do not scan the `memories/` folder directly for non-core memory", "no full-folder fallback")
     assert_contains(skill_md, "if you are already extracting `2+` catalog-derived memory cards, drop any candidate whose `token_cost_estimate` is over `500`", "categorical token guard")
@@ -135,9 +154,15 @@ def main() -> int:
     assert_contains(skill_md, "type: workflow_template", "catalog type matching")
     assert_contains(skill_md, "→ [shared:", "shared fragment resolution reference")
 
-    if catalog_md is not None:
-        assert_contains(catalog_md, "## example-memory-note", "catalog entry")
-        assert_contains(catalog_md, "## example-follow-up", "short-term catalog entry")
+    if catalog_index_md is not None:
+        assert_contains(catalog_index_md, "### core-identity", "index core-identity shard block")
+        assert_contains(catalog_index_md, "### memory-system", "index memory-system shard block")
+        assert_contains(catalog_index_md, "- stable_tags:", "stable_tags field")
+    if shard_bundle:
+        # Example slugs (present when workspace fixtures include them).
+        for slug in ("## example-memory-note", "## example-follow-up"):
+            if slug in shard_bundle:
+                assert_contains(shard_bundle, slug, "shard catalog entry")
 
     assert_contains(
         round_md,

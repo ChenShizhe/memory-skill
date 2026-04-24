@@ -8,7 +8,7 @@ Confirm that the current `memory-retriever` implementation:
 
 1. provides the required instruction structure in `SKILL.md`
 2. always reads the core files first in the exact order `AGENTS.md -> SOUL.md -> IDENTITY.md -> USER.md`
-3. uses `memories/catalog.md` as the first shortlist source only for non-core searchable memory
+3. uses `memories/catalog-index.md` as the first shortlist source, then opens only the shortlisted shards under `memories/catalog-shards/`, for non-core searchable memory
 4. does not read `experiences/` or archive memory
 5. produces an expanded instruction with a hard priority rule, additive core baseline injections, and verbatim core-file content
 6. limits omitted-candidate trace logging and follow-up duplication
@@ -27,17 +27,17 @@ The test should pass only if all of the following are true:
    - the exact file order `AGENTS.md -> SOUL.md -> IDENTITY.md -> USER.md`
    - the rule that core-file injections are additive baseline context and do not consume the tier budget
    - the rule that each core file is injected verbatim with `injection_mode: full_file_verbatim`
-   - the two-pass catalog shortlist plus focused-read flow after the core pre-pass
+   - the Pass 1a (shard selection via catalog-index) plus Pass 1b (focused read of shortlisted shards) flow after the core pre-pass
    - the timestamped retrieval-round output rule
    - a hard cap on omitted-candidate logging
    - a follow-up deduplication rule against `latest-expanded-instruction.md`
    - a missing-`AGENTS.md` hard-fail rule
-   - a missing-or-empty catalog fallback that returns only the core baseline and forbids full-folder scans for non-core memory
+   - a missing-or-empty `catalog-index.md` fallback that returns only the core baseline and forbids full-folder scans for non-core memory, and a missing-shard-file fallback that continues with the remaining shortlisted shards
    - a categorical token guard using `token_cost_estimate`
    - a narrow exception to read `memories/provider-quotas.md`
    - quota allocation modes
    - a rule that quota guidance is not a memory card
-2. `memories/catalog.md` exists and contains searchable memory entries.
+2. `memories/catalog-index.md` exists and lists shard blocks with `description` and `stable_tags`; `memories/catalog-shards/` contains the shard files referenced by the index.
 3. a retrieval-round fixture exists under `memory-retriever/fixtures/sample-project/memory/retrieval-rounds/`.
 4. `memory-retriever/fixtures/sample-project/memory/latest-expanded-instruction.md` exists.
 5. The round file includes:
