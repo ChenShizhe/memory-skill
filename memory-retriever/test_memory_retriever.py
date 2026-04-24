@@ -68,6 +68,21 @@ def assert_full_core_injection(document: str, core_file: str, label: str) -> Non
         raise AssertionError(f"{label} core injection content mismatch for {core_file}")
 
 
+def count_pending_proposals(proposals_dir: Path) -> int:
+    """Count pending proposal files under ``proposals_dir``.
+
+    Mirrors the memory-retriever session-start nudge: enumerate *.md files at
+    the top level of ``proposals_dir``, excluding ``resolved/`` and hidden
+    files. Returns 0 when the directory does not exist.
+    """
+    if not proposals_dir.exists():
+        return 0
+    return sum(
+        1 for p in proposals_dir.iterdir()
+        if p.is_file() and p.suffix == ".md" and not p.name.startswith(".")
+    )
+
+
 def main() -> int:
     skill_md = read_text(ROOT / "memory-retriever/SKILL.md")
 
@@ -139,6 +154,47 @@ def main() -> int:
         ),
         "core file order",
     )
+
+    # Pending proposal reporting (brief m1-02).
+    assert_contains(skill_md, "## Pending Proposal Reporting", "pending proposal reporting section")
+    assert_contains(
+        skill_md,
+        "[INFO] <N> proposal(s) pending in memories/proposals/",
+        "proposal info line format",
+    )
+    assert_contains(
+        skill_md,
+        "memory-retriever counts the files in `memories/proposals/`",
+        "proposal count rule",
+    )
+    assert_contains(
+        skill_md,
+        "excluding `memories/proposals/resolved/`",
+        "proposal count excludes resolved subdir",
+    )
+
+    # Proposal-count fixture tests.
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory() as td:
+        proposals = Path(td) / "proposals"
+        # Case 1: directory missing → count 0.
+        assert count_pending_proposals(proposals) == 0, "missing dir count"
+
+        # Case 2: empty directory → count 0.
+        proposals.mkdir()
+        assert count_pending_proposals(proposals) == 0, "empty dir count"
+
+        # Case 3: 3 pending proposals → count 3.
+        for name in ("ROUTE-a-2026-04-23.md", "UPDATE-b-2026-04-23.md", "ROUTE-c-2026-04-23.md"):
+            (proposals / name).write_text("# stub\n")
+        assert count_pending_proposals(proposals) == 3, "three pending proposals"
+
+        # Case 4: resolved/ non-empty but top-level empty → count 0.
+        for p in list(proposals.glob("*.md")):
+            (proposals / "resolved" / "2026-04").mkdir(parents=True, exist_ok=True)
+            p.rename(proposals / "resolved" / "2026-04" / p.name)
+        assert count_pending_proposals(proposals) == 0, "resolved-only count"
 
     # Workflow template injection assertions
     assert_contains(skill_md, "## Workflow Template Injection", "workflow template injection section")

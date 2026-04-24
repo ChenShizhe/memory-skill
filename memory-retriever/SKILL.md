@@ -641,6 +641,16 @@ If the user determines the handoff is stale, they can either:
 - Ask the agent to proceed as if no handoff exists (equivalent to `fresh_session=true`).
 - Continue with the handoff as-is, noting which parts are outdated.
 
+## Pending Proposal Reporting
+
+At session start, after the staleness check, memory-retriever counts the files in `memories/proposals/` (excluding `memories/proposals/resolved/` and any hidden files). If the count is non-zero, append to the `### Execution Note` section of the expanded instruction:
+
+```md
+- [INFO] <N> proposal(s) pending in memories/proposals/. Run memory-manager in approval_mode=propose_sensitive_changes to resolve.
+```
+
+This check is read-only. memory-retriever does not open the proposal files; it only enumerates them. The check runs only when `session_phase=start` and the detection matrix selects a path that writes an expanded instruction. Mid-session recall (`query` mode) skips this check.
+
 ## Retrieval Sources
 
 Mandatory core session files:
