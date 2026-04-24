@@ -18,7 +18,8 @@ You are also the only normal workflow skill allowed to maintain the operational 
 - Maintain searchable memory in `memories/long-term/` and `memories/short-term/`.
 - Maintain archive memory in `memories/archive/`.
 - Maintain:
-  - `memories/catalog.md`
+  - `memories/catalog-index.md`
+  - `memories/catalog-shards/<shard>.md`
   - `memories/archive-catalog.md`
   - `memories/manager-ledger.md`
   - `memories/provider-quotas.md`
@@ -91,7 +92,7 @@ Archive is not searchable by `memory-retriever`. Use it for:
 
 ### Searchable catalog
 
-`memories/catalog.md` contains searchable long-term and short-term entries only.
+Searchable long-term and short-term entries live in per-shard files under `memories/catalog-shards/<shard>.md`. Each shard has two subsections: `## Generated Entries` (auto-managed) and `## Manual Entries` (human-frozen). `memories/catalog-index.md` is the manifest; memory-retriever reads it first and opens only shortlisted shards.
 
 Required fields per entry:
 
@@ -158,7 +159,8 @@ Use this exact append template:
 - archive_files_updated:
   - none
 - catalog_updates:
-  - memories/catalog.md
+  - memories/catalog-index.md
+  - memories/catalog-shards/<shard>.md
   - memories/archive-catalog.md
 - quota_updates:
   - none
@@ -316,9 +318,9 @@ Quota lines from `## Used Quota` are operational data, not memory candidates. Ne
 
 ### Deduplication Algorithm
 
-Deduplication must follow a strict catalog-first path to control token use.
+Deduplication must follow a strict index-first, shard-focused path to control token use.
 
-1. Read `memories/catalog.md` first.
+1. Read `memories/catalog.md` first — historically the flat catalog; now replaced by reading `memories/catalog-index.md` first to pick 1–2 candidate shards, then reading those shards.
 2. Shortlist only entries whose `topics`, `projects`, `type`, or `summary` indicate a plausible overlap.
 3. Open only the specific memory files referenced by those shortlisted catalog entries.
 4. Compare the candidate item against those opened files.
@@ -352,12 +354,13 @@ If a new item improves an existing one, merge it and refresh metadata instead of
 13. Check for shared fragment extraction opportunities per the Shared Workflow Fragment Rules.
 14. Deduplicate against searchable memory and catalogs.
 15. Generate a slug via `vault_io.slugify()` and choose the layer directory (`memories/long-term/` or `memories/short-term/`).
+15a. **Route to shard.** Call `route_card(frontmatter)` (see Shard Routing section) and record the shard name on the ingestion record. The card body still goes to its `long-term/<slug>.md` or `short-term/<slug>.md` path as before; the shard receives the catalog entry (the `## <slug>` block with its metadata), not the body.
 16. If the destination is sensitive, prepare a proposal and do not apply the change.
 17. For ADD invoke `ingest_memory.py`; for UPDATE invoke `ingest_memory.py --update`; for DELETE move the note file to `memories/archive/`.
 17a. Run memory evolution: scan catalog entries for topic overlap (at least 2 shared topics), update `## Related` on up to 5 neighbor notes with reciprocal links, and do not update neighbors' `last_updated` for link-only edits.
 17b. Run hub maintenance: add new notes to matching hubs, create hubs when a topic cluster reaches at least 4 notes, and run cleanup for hubs with fewer than 2 members.
 18. Review searchable short-term memory for promotion or archive movement.
-19. For normal runs do targeted catalog updates; for `rebuild_catalog` run reason invoke `python3 knowledge-maester/scripts/generate_memory_catalog.py --vault-path memories/`.
+19. For normal runs do targeted catalog updates: append/replace the entry in the Generated subsection of the target shard file (`memories/catalog-shards/<shard>.md`) and update the matching shard block's `card_count` and `last_updated` fields in `memories/catalog-index.md` in place. For `rebuild_catalog` run reason invoke `python3 knowledge-maester/scripts/generate_memory_catalog.py --vault-path memories/`.
 20. Update `memories/archive-catalog.md` when needed.
 21. Move processed experience files to `experiences/processed/`.
 22. After moving a processed file, remove any now-empty source directories, pruning upward until reaching `experiences/` or a non-empty directory.
@@ -371,7 +374,7 @@ Algorithm:
 
 1. Read the note's frontmatter `topics`.
 2. If the note is short-term, skip evolution.
-3. Scan `memories/catalog.md` for candidate notes with topic overlap of at least 2 shared topics.
+3. Scan `memories/catalog-index.md` and the relevant shards under `memories/catalog-shards/` for candidate notes with topic overlap of at least 2 shared topics.
 4. Exclude hub notes (`type: hub`) from candidate targets.
 5. Sort candidates by overlap count descending, then by recency (`updated`) descending.
 6. Keep at most 5 candidates.
@@ -398,7 +401,7 @@ Rules:
 2. Create new hub:
    - after evolution, for each topic, check long-term non-hub notes in that topic cluster
    - if cluster size is at least 4 and no hub covers that topic, create `memories/long-term/_hub-<topic-slug>.md` using the hub schema and add all cluster members
-   - add the hub to `memories/catalog.md`
+   - add the hub to `memories/catalog-shards/hubs.md` (Generated subsection) and refresh `card_count` / `last_updated` for the `hubs` shard in `memories/catalog-index.md`
 3. Remove undersized hubs:
    - when note archival or cleanup leaves a hub with fewer than 2 members, delete the hub file and remove its catalog entry
 4. Cleanup pass on every ingest:
@@ -459,18 +462,19 @@ The snapshot-first rule avoids double-counting cumulative quota snapshots when e
 Boundary rules:
 
 - never infer quota usage from prose outside `## Used Quota`
-- never add `memories/provider-quotas.md` to `memories/catalog.md`
+- never add `memories/provider-quotas.md` to `memories/catalog-index.md` or any `memories/catalog-shards/<shard>.md`
 - never let malformed quota lines block normal memory ingestion
 - never auto-create provider sections from arbitrary experience text
 
 ## Catalog Maintenance Rules
 
-When updating `memories/catalog.md` or `memories/archive-catalog.md`:
+When updating `memories/catalog-shards/<shard>.md`, `memories/catalog-index.md`, or `memories/archive-catalog.md`:
 
 - always use targeted append or targeted in-place updates
-- append a new entry when the memory item is new
+- append a new entry when the memory item is new (target the `## Generated Entries` subsection of the routed shard; never write to `## Manual Entries` automatically)
 - update only the affected entry when metadata changes
-- if an approved edit changes `memories/USER.md`, `memories/SOUL.md`, `memories/IDENTITY.md`, or `memories/AGENTS.md`, refresh the matching `memories/catalog.md` entry in the same run
+- after every ingestion, update `memories/catalog-index.md` by recomputing the target shard's `card_count` (count `## ` slug headings across both subsections of the shard file) and `last_updated` (max `updated:` across cards in the shard); `description` and `stable_tags` are hand-edited and must never be rewritten by ingestion
+- if an approved edit changes `memories/USER.md`, `memories/SOUL.md`, `memories/IDENTITY.md`, or `memories/AGENTS.md`, refresh the matching entry in `memories/catalog-shards/core-identity.md` in the same run
 - never regenerate the full catalog from scratch during a normal ingest run
 
 Rebuild the full catalog only when the run reason is `rebuild_catalog`, and do it by invoking:
@@ -480,8 +484,8 @@ python3 knowledge-maester/scripts/generate_memory_catalog.py --vault-path memori
 ```
 
 When creating or updating workflow template files:
-- add or update a dedicated catalog entry in `memories/catalog.md` for each template
-- add or update a dedicated catalog entry for each shared fragment
+- add or update a dedicated catalog entry in the `workflow-templates` shard (`memories/catalog-shards/workflow-templates.md`, Generated subsection) for each template
+- add or update a dedicated catalog entry in the same `workflow-templates` shard for each shared fragment
 - workflow template catalog entries use `type: workflow_template`
 - shared fragment catalog entries use `type: workflow_fragment`
 
@@ -521,6 +525,22 @@ Catalog entry template for shared fragments:
 - token_cost_estimate: <estimate>
 ```
 
+## Shard Routing
+
+Every new or updated searchable memory card is routed to exactly one shard under `memories/catalog-shards/<shard>.md`. Routing is deterministic and follows a priority-ordered rule set. First match wins.
+
+The routing function is `route_card(card_frontmatter) -> shard_name`, implemented in `bootstrap.py`. See that file for the canonical rule ladder.
+
+Shards have two subsections: `## Generated Entries` (auto-managed) and `## Manual Entries` (human-frozen; never auto-rewritten). Routing targets the Generated subsection; ingestion writes go there.
+
+When routing returns `misc.md`, the card is still written to `misc.md` immediately. (In this brief's scope, no further action is taken; the proposal-staged ambiguous-routing protocol is added in brief m1-03.)
+
+Catalog index bookkeeping (surgical, in-place update on every ingestion):
+
+- Recompute `card_count` for the target shard by counting `## ` slug headings across both subsections of the shard file.
+- Recompute `last_updated` for the target shard as the max `updated:` across cards in the shard.
+- Rewrite only those two fields under the matching `### <shard-name>` block in `catalog-index.md`. `description` and `stable_tags` are never touched by ingestion.
+
 ## Git Integration Rules
 
 If git integration has been enabled for `memories/`, perform the git step only after a successful ingest run has finished all file writes and moves.
@@ -558,8 +578,8 @@ When a sensitive update is indicated:
 - include the exact intended change, the reason, and the source experience file
 - record it in the ledger
 - leave the file unchanged
-- do not update `memories/catalog.md` yet if the run produced only a proposal
-- once explicit user approval allows the core file edit to be applied, update the matching `memories/catalog.md` entry in the same run so the searchable metadata stays aligned
+- do not update `memories/catalog-shards/core-identity.md` yet if the run produced only a proposal
+- once explicit user approval allows the core file edit to be applied, update the matching entry in `memories/catalog-shards/core-identity.md` (Generated subsection) in the same run so the searchable metadata stays aligned, and refresh `memories/catalog-index.md` for the `core-identity` shard (`card_count` / `last_updated` only)
 
 Use this exact proposal template:
 
