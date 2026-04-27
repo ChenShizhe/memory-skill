@@ -97,7 +97,16 @@ python3 knowledge-maester/scripts/ingest_ticker.py \
 
 python3 knowledge-maester/scripts/ingest_ticker.py \
   --mode append-thesis --source PATH_TO_THESIS_BLOCK_MD --ticker SYMBOL \
-  [--vault-path PATH]
+  [--vault-path PATH] [--source-vault-root PATH] \
+  [--seed-predictions] [--seed-credibility]
+
+# Append-thesis also accepts paper-reader 10-K-mode summary output as --source
+# (detected via frontmatter `mode: 10k`). The script synthesizes a three-layer
+# thesis block from the 14-section summary plus its claims sidecar.
+# --source-vault-root locates the claims sidecar.
+# --seed-predictions writes predictions/ entries from projection claims.
+# --seed-credibility registers <TICKER>_management_<fiscal_year> in
+# reference/credibility-log.md.
 
 # Ingest a reference/capability memory note
 python3 knowledge-maester/scripts/ingest_reference.py \

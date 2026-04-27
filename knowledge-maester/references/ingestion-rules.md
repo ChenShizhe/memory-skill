@@ -130,6 +130,30 @@ Steps:
 
 Missing sub-sections (low-level block, high-level block) cause `ingest_ticker.py` to exit with a non-zero status and an explanatory message. This enforces the three-layer spec at the vault-write boundary, independent of whether the specialist that produced the brief followed the spec.
 
+#### 10-K-mode summary input (append-thesis only)
+
+`--mode append-thesis` also accepts paper-reader 10-K-mode summary output as input. Detection: source frontmatter `mode: 10k`.
+
+Validation (all checks run before any vault write; abort on any failure):
+
+1. Frontmatter `mode == "10k"`.
+2. Frontmatter `ticker` matches the `--ticker` argument.
+3. Frontmatter `cite_key` and `fiscal_year` present.
+4. Body contains all 14 required H2 sections in any order: Company Snapshot, Business and Segments, Priority Risk Factors, MD&A Synthesis, Segment Performance, Financial Position, Cash Flow Quality, Notes Highlights, Controls and Governance, Non-GAAP and KPI Reconciliation, Evolving-Topic Coverage, Textual-Analysis Flags, Forward-Looking Statements, Open Questions.
+
+Optional companion file: claims sidecar at `<source-vault-root>/[literature/]claims/<cite_key>.json`. The script probes `--source-vault-root` first, then the source-path layout (`<root>/papers/<cite>.md` → `<root>/claims/<cite>.json`), then the source file's sibling for hand-crafted fixtures. If absent, ingestion still succeeds; sidecar-derived behavior (claim-sourced YAML evidence pointers, `--seed-predictions`) no-ops silently.
+
+Synthesis: the script builds a three-layer thesis block from the 14 sections (low-level block from 9 evidence sections; high-level block from 5 interpretive sections; YAML brief from frontmatter + Segment Performance table + Textual-Analysis Flags + Forward-Looking Statements). The synthesized block satisfies the same `_validate_thesis_block` contract as hand-drafted input, so the existing insertion path is reused.
+
+Idempotency: 10-K-mode inputs are deduped on `cite_key`. Running the same paper-reader summary twice returns `NOTE_EXISTS_AND_CURRENT` and exits cleanly.
+
+#### Optional flags on append-thesis (10-K-mode input only)
+
+- `--seed-predictions` — for each `projection` claim in the sidecar, write a `predictions/<filed-date>-<TICKER>-<slug>.md` entry pointing at `source_cite_key: <cite_key>`. `check_date` is computed as the claim's `guidance_horizon_end` plus 30 days where present.
+- `--seed-credibility` — register source identifier `<TICKER>_management_<fiscal_year>` in `reference/credibility-log.md` with status `unscored`. Idempotent: re-running on the same identifier no-ops.
+
+Both flags default off. Both no-op silently when invoked on hand-drafted (non-10-K) input.
+
 ## Ingestion Contract: Market-Thinker Analysis
 
 **Script:** `ingest_analysis.py`

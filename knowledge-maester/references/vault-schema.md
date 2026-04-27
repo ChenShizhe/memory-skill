@@ -158,6 +158,41 @@ The AUTO-GENERATED Appearances section is preserved when `ingest_ticker.py --mod
 
 Template: `templates/ticker-profile-template.md` (for profiles) and `templates/ticker-template.md` (for stubs).
 
+#### Profile — 10-K-mode summary input
+
+`ingest_ticker.py --mode append-thesis` accepts paper-reader 10-K-mode summary output as an alternative to a hand-drafted thesis-block fragment. Detection is via source frontmatter `mode: 10k`. The script synthesizes a three-layer thesis block from the 14-section summary plus its (optional) claims sidecar and appends it to `## Thesis updates`.
+
+Synthesized YAML brief schema:
+```yaml
+ticker: <SYMBOL>
+brief_date: <filing-date>
+brief_trigger: 10-K filing FY<YYYY>
+filing: 10-K
+fiscal_year: <YYYY>
+cite_key: <TICKER>_10k_FY<YYYY>
+source_path: <paper-reader-vault-root>/papers/<cite_key>.md
+confidence: derived
+thesis_state: evolving
+one_line_thesis: ""
+confidence_rationale: "machine-synthesized from 10-K filing; downstream specialist refinement expected"
+key_catalysts: []
+key_risks: []
+evidence_pointers:
+  - papers/<cite_key>.md
+  - claims/<cite_key>.json   # only if sidecar resolved
+prediction_log_entries: []
+segments:                     # parsed from `## Segment Performance` table; `~` if parse fails
+  - name: "<segment-name>"
+    revenue: "<value>"
+    margin: "<value>"
+    yoy_change: "<value>"
+textual_analysis: ~           # `~` while paper-reader textual-analysis screening (T-009) is unshipped
+forward_looking: |
+  <verbatim Forward-Looking Statements section>
+```
+
+Idempotency for 10-K-mode input is by `cite_key` rather than by date — re-running with the same paper-reader summary returns `NOTE_EXISTS_AND_CURRENT`.
+
 ### Type: `analysis`
 
 Target directory: `market/analysis/`

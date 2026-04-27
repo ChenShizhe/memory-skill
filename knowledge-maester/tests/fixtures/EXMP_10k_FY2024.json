@@ -1,0 +1,70 @@
+{
+  "cite_key": "EXMP_10k_FY2024",
+  "ticker": "EXMP",
+  "claims": [
+    {
+      "type": "methodology",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "8-Note 3 Revenue Recognition",
+        "confidence": "high"
+      },
+      "claim_text": "Revenue recognized at point-in-time for product shipments; over-time for multi-year service contracts using input-method progress measurement."
+    },
+    {
+      "type": "empirical",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "7-MD&A Synthesis",
+        "confidence": "high"
+      },
+      "claim_text": "Consolidated FY2024 revenue $3,290M, +6.2% YoY; gross margin expanded 80 bps; operating cash flow $642M against net income $618M (1.04x conversion)."
+    },
+    {
+      "type": "projection",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "7-Forward-Looking Statements",
+        "confidence": "medium"
+      },
+      "guidance_horizon_end": "2025-12-31",
+      "claim_text": "FY2025 consolidated revenue growth guided 4-6%; Adjusted EBITDA margin to expand 30-60 bps; capex $290-310M; assumes stable raw-material costs and no customer-share-shift events."
+    },
+    {
+      "type": "limitation",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "7-Critical Accounting Estimates",
+        "confidence": "high"
+      },
+      "claim_text": "Warranty reserve sensitivity of plus-or-minus $12M for plus-or-minus 100 bps change in claim-rate assumption; pension PBO sensitivity of plus-or-minus $28M for plus-or-minus 25 bps change in discount rate."
+    },
+    {
+      "type": "data-availability",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "10-Incorporation by Reference",
+        "confidence": "high"
+      },
+      "claim_text": "Part III items 10-14 incorporated by reference from the proxy statement to be filed within 120 days of fiscal year-end."
+    },
+    {
+      "type": "company-thesis",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "7-Segment Performance",
+        "confidence": "high"
+      },
+      "claim_text": "Industrial Components grew 9.1% with margin expansion; Services grew 4.4% with stable margins; Specialty Alloys merchant-market revenue declined 2.0% but captive supply continues to support Components margin."
+    },
+    {
+      "type": "supply-chain-fact",
+      "source_anchor": {
+        "source_type": "10-K Item",
+        "locator": "1A-Customer and Supplier Concentration",
+        "confidence": "high"
+      },
+      "claim_text": "Top three OEM customers represented approximately 38% of consolidated revenue; specialty-alloy raw-material supply concentrated in two upstream producers."
+    }
+  ]
+}
