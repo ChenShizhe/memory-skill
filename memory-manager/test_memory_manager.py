@@ -12,6 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "memory-manager"))
 from bootstrap import (  # noqa: E402
     route_card,
+    route_card_with_index,
+    normalize_tags,
+    SYNONYMS,
     write_entry_to_shard,
     update_index_for_shard,
     SHARD_HEADER_TEMPLATE,
@@ -23,6 +26,8 @@ from bootstrap import (  # noqa: E402
     CATALOG_PHASE2_THRESHOLD,
     PROPOSAL_REVIEW_THRESHOLD,
 )
+sys.path.insert(0, str(ROOT / "memory-manager" / "test_fixtures"))
+from route_card_old import route_card_old  # noqa: E402
 
 
 def read_text(path: Path) -> str:
@@ -314,6 +319,388 @@ class TestRouteCard(unittest.TestCase):
             route_card({"topics": ["unfamiliar-topic"], "projects": []}),
             "misc.md",
         )
+
+
+# ---------------------------------------------------------------------------
+# Labeled corpus + per-rule + precedence + coverage tests (2026-05-01).
+#
+# Each fixture asserts BOTH the destination shard AND the firing rule index
+# (via route_card_with_index). Rule-index assertion catches ordering bugs
+# ("rule X moved up, broke rule Y") that pure shard-equality tests miss.
+# Pattern: DroolsAssert / DMN Unique hit-policy.
+# ---------------------------------------------------------------------------
+
+
+class TestRoutingCorpus(unittest.TestCase):
+    """One fixture per rule + variants. Asserts (shard, rule_index)."""
+
+    CORPUS: list[tuple[str, dict, str, int]] = [
+        # === Block 1: identity / type / project ===
+        ("core-identity AGENTS.md", {"path": "memories/AGENTS.md"}, "core-identity.md", 1),
+        ("core-identity USER.md", {"path": "memories/USER.md"}, "core-identity.md", 1),
+        ("workflow_template", {"type": "workflow_template"}, "workflow-templates.md", 2),
+        ("role_profile", {"type": "role_profile"}, "roles.md", 3),
+        ("hub", {"type": "hub"}, "hubs.md", 4),
+        ("graduated project (research-meeting)", {"projects": ["research-meeting"]}, "project-research-meeting.md", 5),
+        ("graduated project (coordination)", {"projects": ["coordination"]}, "project-coordination.md", 5),
+        ("non-graduated sole project", {"projects": ["lsm4brain"]}, "project-continuity.md", 6),
+
+        # === Block 2: topical — paper-reading (rule 7) ===
+        ("paper-reader- slug", {"slug": "paper-reader-foo", "projects": []}, "paper-reading.md", 7),
+        ("paper-discovery- slug", {"slug": "paper-discovery-foo", "projects": []}, "paper-reading.md", 7),
+        ("paper-review- slug", {"slug": "paper-review-foo", "projects": []}, "paper-reading.md", 7),
+        ("paper-reading topic", {"topics": ["paper-reading"], "projects": []}, "paper-reading.md", 7),
+        ("paper-reader topic", {"topics": ["paper-reader"], "projects": []}, "paper-reading.md", 7),
+        ("reading-strategy (NEW)", {"topics": ["reading-strategy"], "projects": []}, "paper-reading.md", 7),
+        ("industry-reports (NEW)", {"topics": ["industry-reports"], "projects": []}, "paper-reading.md", 7),
+        # `stopping-rule` was considered for paper-reading but dropped: too
+        # generic (matches autonomous-iteration / decision-making cards too).
+        # The motivating card `marginal-return-stopping-rule-for-industry-
+        # report-reading` still routes via `reading-strategy` / `industry-
+        # reports` so coverage is preserved.
+
+        # === Block 2: topical — memory-system (rule 8) ===
+        ("memory- slug prefix", {"slug": "memory-foo", "projects": []}, "memory-system.md", 8),
+        ("catalog- slug prefix", {"slug": "catalog-foo", "projects": []}, "memory-system.md", 8),
+        ("manager-ledger path (NEW)", {"path": "memories/manager-ledger.md", "projects": []}, "memory-system.md", 8),
+        ("memory-manager project prefix (NEW)", {"projects": ["memory-manager-v1", "foo"]}, "memory-system.md", 8),
+        ("memory-ingestion topic", {"topics": ["memory-ingestion"], "projects": []}, "memory-system.md", 8),
+        ("retrieval topic", {"topics": ["retrieval"], "projects": []}, "memory-system.md", 8),
+        ("memory-manager topic (NEW)", {"topics": ["memory-manager"], "projects": []}, "memory-system.md", 8),
+        ("operations topic (NEW)", {"topics": ["operations"], "projects": []}, "memory-system.md", 8),
+        ("ingestion-ledger topic (NEW)", {"topics": ["ingestion-ledger"], "projects": []}, "memory-system.md", 8),
+
+        # === Block 2: topical — market-ops (rule 9) ===
+        ("market- slug prefix", {"slug": "market-foo", "projects": []}, "market-ops.md", 9),
+        ("portfolio- slug prefix", {"slug": "portfolio-foo", "projects": []}, "market-ops.md", 9),
+        ("US-Iran project prefix (NEW)", {"projects": ["US-Iran-tracker", "foo"]}, "market-ops.md", 9),
+        ("us-iran lowercase project prefix (NEW)", {"projects": ["us-iran-bridge", "foo"]}, "market-ops.md", 9),
+        ("market-watcher topic", {"topics": ["market-watcher"], "projects": []}, "market-ops.md", 9),
+        ("provider-orchestration (NEW)", {"topics": ["provider-orchestration"], "projects": []}, "market-ops.md", 9),
+        ("report-validation (NEW)", {"topics": ["report-validation"], "projects": []}, "market-ops.md", 9),
+        ("evidence-synthesis (NEW)", {"topics": ["evidence-synthesis"], "projects": []}, "market-ops.md", 9),
+        ("geopolitics (NEW)", {"topics": ["geopolitics"], "projects": []}, "market-ops.md", 9),
+        ("market-risk (NEW)", {"topics": ["market-risk"], "projects": []}, "market-ops.md", 9),
+        ("us-iran topic (NEW)", {"topics": ["us-iran"], "projects": []}, "market-ops.md", 9),
+
+        # === Block 2: topical — tooling-ops (rule 10) ===
+        ("git topic", {"topics": ["git"], "projects": []}, "tooling-ops.md", 10),
+        ("credential-broker topic", {"topics": ["credential-broker"], "projects": []}, "tooling-ops.md", 10),
+        ("obsidian (NEW)", {"topics": ["obsidian"], "projects": []}, "tooling-ops.md", 10),
+        ("knowledge-graph (NEW)", {"topics": ["knowledge-graph"], "projects": []}, "tooling-ops.md", 10),
+        ("vault-operations (NEW)", {"topics": ["vault-operations"], "projects": []}, "tooling-ops.md", 10),
+        ("model-routing (NEW)", {"topics": ["model-routing"], "projects": []}, "tooling-ops.md", 10),
+        ("provider-selection (NEW)", {"topics": ["provider-selection"], "projects": []}, "tooling-ops.md", 10),
+        ("capability-map (NEW)", {"topics": ["capability-map"], "projects": []}, "tooling-ops.md", 10),
+        ("pandoc (NEW)", {"topics": ["pandoc"], "projects": []}, "tooling-ops.md", 10),
+        ("latex (NEW)", {"topics": ["latex"], "projects": []}, "tooling-ops.md", 10),
+        ("mathjax (NEW)", {"topics": ["mathjax"], "projects": []}, "tooling-ops.md", 10),
+        ("deliverable-tooling (NEW)", {"topics": ["deliverable-tooling"], "projects": []}, "tooling-ops.md", 10),
+        ("reproducibility (NEW)", {"topics": ["reproducibility"], "projects": []}, "tooling-ops.md", 10),
+
+        # === Block 2: topical — writing-style (rule 11, precedes session-ops) ===
+        ("writing topic", {"topics": ["writing"], "projects": []}, "writing-style.md", 11),
+        ("manuscript topic", {"topics": ["manuscript"], "projects": []}, "writing-style.md", 11),
+        ("review topic", {"topics": ["review"], "projects": []}, "writing-style.md", 11),
+        ("academic-writing topic", {"topics": ["academic-writing"], "projects": []}, "writing-style.md", 11),
+        ("documentation-design (NEW)", {"topics": ["documentation-design"], "projects": []}, "writing-style.md", 11),
+        ("deliverable-design (NEW)", {"topics": ["deliverable-design"], "projects": []}, "writing-style.md", 11),
+        ("user-facing (NEW)", {"topics": ["user-facing"], "projects": []}, "writing-style.md", 11),
+        ("citations (NEW)", {"topics": ["citations"], "projects": []}, "writing-style.md", 11),
+        ("bibtex (NEW)", {"topics": ["bibtex"], "projects": []}, "writing-style.md", 11),
+        ("reference-management (NEW)", {"topics": ["reference-management"], "projects": []}, "writing-style.md", 11),
+
+        # SYNONYMS (canonicalized via normalize_tags before rules execute)
+        ("manuscript-review SYNONYM->manuscript", {"topics": ["manuscript-review"], "projects": []}, "writing-style.md", 11),
+        ("review-style SYNONYM->review", {"topics": ["review-style"], "projects": []}, "writing-style.md", 11),
+        ("review-writing SYNONYM->review", {"topics": ["review-writing"], "projects": []}, "writing-style.md", 11),
+        ("writing-voice SYNONYM->writing", {"topics": ["writing-voice"], "projects": []}, "writing-style.md", 11),
+        ("academic-review SYNONYM->review", {"topics": ["academic-review"], "projects": []}, "writing-style.md", 11),
+        # paper-review synonym → review (writing-style). The misc-drain cards
+        # tagged paper-review are about review-comment style, not paper-reading
+        # workflow, so the canonical is `review` not `paper-reading`.
+        ("paper-review SYNONYM->review", {"topics": ["paper-review"], "projects": []}, "writing-style.md", 11),
+
+        # === Block 2: topical — session-ops (rule 12) ===
+        ("research-meeting- slug", {"slug": "research-meeting-foo", "projects": []}, "session-ops.md", 12),
+        ("session- slug", {"slug": "session-foo", "projects": []}, "session-ops.md", 12),
+        ("research-meeting topic", {"topics": ["research-meeting"], "projects": []}, "session-ops.md", 12),
+        ("session-handoff topic", {"topics": ["session-handoff"], "projects": []}, "session-ops.md", 12),
+        ("decision-making (NEW)", {"topics": ["decision-making"], "projects": []}, "session-ops.md", 12),
+        ("rule-enforcement (NEW)", {"topics": ["rule-enforcement"], "projects": []}, "session-ops.md", 12),
+        ("evaluation (NEW)", {"topics": ["evaluation"], "projects": []}, "session-ops.md", 12),
+        ("documentation-pattern (NEW)", {"topics": ["documentation-pattern"], "projects": []}, "session-ops.md", 12),
+        ("subagent-delegation (NEW)", {"topics": ["subagent-delegation"], "projects": []}, "session-ops.md", 12),
+        ("verification (NEW)", {"topics": ["verification"], "projects": []}, "session-ops.md", 12),
+        ("research-process (NEW)", {"topics": ["research-process"], "projects": []}, "session-ops.md", 12),
+        ("planning (NEW)", {"topics": ["planning"], "projects": []}, "session-ops.md", 12),
+        ("workflow-governance (NEW)", {"topics": ["workflow-governance"], "projects": []}, "session-ops.md", 12),
+        ("project-kickoff (NEW)", {"topics": ["project-kickoff"], "projects": []}, "session-ops.md", 12),
+        ("personal-productivity (NEW)", {"topics": ["personal-productivity"], "projects": []}, "session-ops.md", 12),
+
+        # === Block 2: topical — skill-ops (rule 13) ===
+        ("ralph- slug", {"slug": "ralph-foo", "projects": []}, "skill-ops.md", 13),
+        ("skill- slug", {"slug": "skill-foo", "projects": []}, "skill-ops.md", 13),
+        ("skill-design topic", {"topics": ["skill-design"], "projects": []}, "skill-ops.md", 13),
+        ("strangler-fig topic", {"topics": ["strangler-fig"], "projects": []}, "skill-ops.md", 13),
+        ("agent-architecture (NEW)", {"topics": ["agent-architecture"], "projects": []}, "skill-ops.md", 13),
+        ("modularity (NEW)", {"topics": ["modularity"], "projects": []}, "skill-ops.md", 13),
+        ("resilience (NEW)", {"topics": ["resilience"], "projects": []}, "skill-ops.md", 13),
+
+        # === Block 2: topical — agent-ops (rule 14) ===
+        ("agent-ops topic", {"topics": ["agent-ops"], "projects": []}, "agent-ops.md", 14),
+        ("safety topic", {"topics": ["safety"], "projects": []}, "agent-ops.md", 14),
+        ("preflight topic", {"topics": ["preflight"], "projects": []}, "agent-ops.md", 14),
+        ("paper-trail topic", {"topics": ["paper-trail"], "projects": []}, "agent-ops.md", 14),
+
+        # === Block 3: fallback (rule 15) ===
+        ("falls through to misc", {"topics": ["unfamiliar-topic"], "projects": []}, "misc.md", 15),
+    ]
+
+    def test_corpus(self) -> None:
+        for label, frontmatter, expected_shard, expected_rule in self.CORPUS:
+            with self.subTest(label=label):
+                shard, rule = route_card_with_index(frontmatter)
+                self.assertEqual(shard, expected_shard, f"{label}: shard mismatch")
+                self.assertEqual(rule, expected_rule, f"{label}: rule index mismatch")
+
+    def test_precedence_writing_beats_session(self) -> None:
+        """Card with both documentation-pattern (session-ops) and
+        documentation-design (writing-style) routes to writing-style.
+        Writing-style precedes session-ops in the ladder by design.
+        """
+        shard, rule = route_card_with_index({
+            "topics": ["documentation-pattern", "documentation-design"],
+            "projects": [],
+        })
+        self.assertEqual(shard, "writing-style.md")
+        self.assertEqual(rule, 11)
+
+    def test_coverage_every_rule_fires(self) -> None:
+        """Every rule index 1-15 fires at least once across the corpus."""
+        fired = set()
+        for _label, frontmatter, _shard, _rule in self.CORPUS:
+            _shard, rule = route_card_with_index(frontmatter)
+            fired.add(rule)
+        expected = set(range(1, 16))
+        missing = expected - fired
+        self.assertFalse(missing, f"Rule indices never fire across corpus: {sorted(missing)}")
+
+
+class TestSynonyms(unittest.TestCase):
+    """SYNONYMS dict + normalize_tags helper."""
+
+    def test_synonyms_dict_has_six_initial_entries(self) -> None:
+        self.assertEqual(len(SYNONYMS), 6)
+        self.assertIn("manuscript-review", SYNONYMS)
+        self.assertEqual(SYNONYMS["manuscript-review"], "manuscript")
+
+    def test_normalize_tags_extends_with_canonical(self) -> None:
+        result = normalize_tags(["manuscript-review", "foo"])
+        self.assertIn("manuscript-review", result)  # original preserved
+        self.assertIn("manuscript", result)  # canonical added
+        self.assertIn("foo", result)  # non-synonym preserved
+
+    def test_normalize_tags_handles_empty(self) -> None:
+        self.assertEqual(normalize_tags([]), set())
+        self.assertEqual(normalize_tags(None), set())
+        self.assertEqual(normalize_tags(""), set())
+
+    def test_normalize_tags_lowercases(self) -> None:
+        result = normalize_tags(["Foo", "BAR"])
+        self.assertEqual(result, {"foo", "bar"})
+
+    def test_synonym_routes_through_canonical(self) -> None:
+        """A card tagged with a synonym should route as if it carried the
+        canonical tag."""
+        shard, _ = route_card_with_index({"topics": ["manuscript-review"], "projects": []})
+        self.assertEqual(shard, "writing-style.md")
+
+
+# ---------------------------------------------------------------------------
+# Golden-file snapshot + differential test against route_card_old (2026-05-01).
+#
+# Pattern: differential testing (McKeeman 1998 / Evans & Savoia) at
+# file-system scale. The 246 existing cards under ~/Documents/memory/ are
+# the historical corpus; this test routes them through the snapshotted
+# pre-2026-05-01 ladder AND the current ladder, and asserts that any diff
+# is in the explicit whitelist of intended migrations.
+#
+# Skips gracefully if ~/Documents/memory/ is not present (CI / fresh clones).
+# ---------------------------------------------------------------------------
+
+
+import os
+import yaml
+
+
+def _live_memory_root() -> Path | None:
+    """Locate the live memory root or return None if unavailable."""
+    candidates = [
+        Path.home() / "Documents" / "memory",
+        Path(os.environ.get("MEMORY_ROOT", "/nonexistent")),
+    ]
+    for c in candidates:
+        if c.is_dir() and (c / "long-term").is_dir():
+            return c
+    return None
+
+
+_FRONTMATTER_RE = __import__("re").compile(r"^---\n(.*?)\n---", __import__("re").DOTALL)
+
+
+def _read_frontmatter(card_path: Path) -> dict | None:
+    try:
+        text = card_path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return None
+    m = _FRONTMATTER_RE.match(text)
+    if not m:
+        return None
+    try:
+        fm = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return None
+    if not isinstance(fm, dict):
+        return None
+    if "slug" not in fm:
+        fm["slug"] = card_path.stem
+    if "path" not in fm:
+        rel = "memories/" + str(card_path.relative_to(card_path.parents[1]))
+        fm["path"] = rel
+    return fm
+
+
+class TestGoldenSnapshot(unittest.TestCase):
+    """Golden-file regression: re-route the live 246-card corpus and assert
+    the result matches a committed snapshot. Diffs in routing_snapshot.txt
+    become the review artifact for any future routing-rule PR.
+    """
+
+    SNAPSHOT_PATH = Path(__file__).parent / "test_fixtures" / "routing_snapshot.txt"
+
+    @staticmethod
+    def _produce_snapshot(memory_root: Path) -> str:
+        rows = []
+        for sub in ("long-term", "short-term"):
+            d = memory_root / sub
+            if not d.is_dir():
+                continue
+            for card_path in sorted(d.glob("*.md")):
+                fm = _read_frontmatter(card_path)
+                if fm is None:
+                    continue
+                shard, rule = route_card_with_index(fm)
+                rows.append(f"{fm['slug']} -> {shard}, rule_{rule}")
+        rows.sort()
+        return "\n".join(rows) + "\n"
+
+    def test_snapshot_matches_or_emit(self) -> None:
+        memory_root = _live_memory_root()
+        if memory_root is None:
+            self.skipTest("Live memory root not present; skipping golden snapshot.")
+        produced = self._produce_snapshot(memory_root)
+        if not self.SNAPSHOT_PATH.exists() or os.environ.get("UPDATE_GOLDEN") == "1":
+            self.SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            self.SNAPSHOT_PATH.write_text(produced, encoding="utf-8")
+            print(f"WROTE golden snapshot: {self.SNAPSHOT_PATH}")
+            return
+        committed = self.SNAPSHOT_PATH.read_text(encoding="utf-8")
+        self.assertEqual(
+            produced,
+            committed,
+            "Routing snapshot diff. Re-run with UPDATE_GOLDEN=1 if intentional, "
+            "and commit the diff in the same PR.",
+        )
+
+
+class TestDifferentialRouteCard(unittest.TestCase):
+    """Differential test: route_card_old vs current route_card on the live
+    corpus. Asserts every (slug, old_shard, new_shard) diff is in the
+    INTENDED_MIGRATIONS whitelist. Catches accidental routing changes that
+    the labeled corpus might not cover.
+    """
+
+    # 2026-05-01 ladder widening — slugs that intentionally migrate.
+    # Each entry: (slug, expected_old_shard, expected_new_shard).
+    # Empty list means "no diffs allowed."
+    INTENDED_MIGRATIONS: list[tuple[str, str, str]] = [
+        # === Misc drains (cards that previously fell through to misc) ===
+        ("anchor-string-verification-for-review-comments", "misc.md", "writing-style.md"),
+        ("bibtex-per-field-verification-from-canonical-source", "misc.md", "writing-style.md"),
+        ("confidence-rating-with-path-to-higher", "misc.md", "session-ops.md"),
+        ("core-vs-adapter-architecture", "misc.md", "skill-ops.md"),
+        ("cross-check-primary-sources-on-surprise-conclusions", "misc.md", "session-ops.md"),
+        ("diagnose-vs-pick-decision-shapes", "misc.md", "session-ops.md"),
+        ("dont-propose-bypasses-for-load-bearing-rules", "misc.md", "session-ops.md"),
+        ("escalate-after-sandbox-dns-failure", "misc.md", "market-ops.md"),
+        ("excalidraw-file-first-agent-workflow", "misc.md", "tooling-ops.md"),
+        ("give-user-facing-guidance-in-final-actionable-form", "misc.md", "writing-style.md"),
+        ("hierarchical-summarization-before-drafting", "misc.md", "market-ops.md"),
+        ("inline-review-planning-pattern", "misc.md", "session-ops.md"),
+        ("iterative-milestones-for-personal-projects", "misc.md", "session-ops.md"),
+        ("marginal-return-stopping-rule-for-industry-report-reading", "misc.md", "paper-reading.md"),
+        ("non-lead-author-manuscript-comment-style", "misc.md", "writing-style.md"),
+        ("openclaw-routing-and-memorysearch-pinning", "misc.md", "tooling-ops.md"),
+        ("pandoc-math-deliverable-setup-pattern", "misc.md", "tooling-ops.md"),
+        ("python-extraction-for-large-provider-jsons", "misc.md", "market-ops.md"),
+        ("review-voice-constructive-by-default", "misc.md", "writing-style.md"),
+        ("review-writing-workflow-patterns", "misc.md", "writing-style.md"),
+        ("sensitive-proposal-staging", "misc.md", "memory-system.md"),
+        ("stringent-production-profile-expectations", "misc.md", "market-ops.md"),
+        ("subagent-summaries-are-partial", "misc.md", "session-ops.md"),
+        ("summary-block-at-top-of-deliverable", "misc.md", "writing-style.md"),
+        ("us-iran-follow-up", "misc.md", "market-ops.md"),
+
+        # === Cross-shard refinements (writing-style now wins for deliverable
+        #     and manuscript-discipline cards previously routed to session-ops
+        #     via "session-" slug-substring or research-meeting topic) ===
+        ("anchor-collaborator-deliverables-on-existing-objects", "session-ops.md", "writing-style.md"),
+        ("hawkes-session-9-continuity", "session-ops.md", "writing-style.md"),
+        ("hawkes-session-10-continuity", "session-ops.md", "writing-style.md"),
+        ("hawkes-session-11-continuity", "session-ops.md", "writing-style.md"),
+        ("hawkes-session-15-continuity", "session-ops.md", "writing-style.md"),
+        ("lemma-side-by-side-means-display-equations", "session-ops.md", "writing-style.md"),
+        ("non-lead-author-findings-tracker-format", "session-ops.md", "writing-style.md"),
+        ("two-deliverables-when-consumption-modes-differ", "session-ops.md", "writing-style.md"),
+
+        # === skill-ops -> writing-style for documentation-design cards ===
+        ("user-facing-agent-facing-doc-separation", "skill-ops.md", "writing-style.md"),
+
+        # === skill-ops -> session-ops for subagent-delegation cards
+        #     (silent context consumption is fundamentally a subagent-behavior
+        #     pattern even though it touches skill-design) ===
+        ("silent-context-consumption-is-the-default", "skill-ops.md", "session-ops.md"),
+    ]
+
+    def test_no_unexpected_diffs(self) -> None:
+        memory_root = _live_memory_root()
+        if memory_root is None:
+            self.skipTest("Live memory root not present; skipping differential test.")
+        diffs: list[tuple[str, str, str]] = []
+        for sub in ("long-term", "short-term"):
+            d = memory_root / sub
+            if not d.is_dir():
+                continue
+            for card_path in sorted(d.glob("*.md")):
+                fm = _read_frontmatter(card_path)
+                if fm is None:
+                    continue
+                old_shard = route_card_old(fm)
+                new_shard = route_card(fm)
+                if old_shard != new_shard:
+                    diffs.append((fm["slug"], old_shard, new_shard))
+
+        whitelist = set(self.INTENDED_MIGRATIONS)
+        unexpected = [d for d in diffs if d not in whitelist]
+        if unexpected:
+            sample = "\n  ".join(f"{s}: {o} -> {n}" for s, o, n in unexpected[:20])
+            self.fail(
+                f"{len(unexpected)} unexpected routing diffs (showing up to 20):\n  {sample}\n"
+                f"If these are intended, add them to INTENDED_MIGRATIONS."
+            )
+        # Optional warning: whitelist entries that didn't actually migrate
+        # (e.g., card was deleted or re-tagged) are not failures.
 
 
 class TestShardWriteAndIndexUpdate(unittest.TestCase):
@@ -662,6 +1049,10 @@ if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite = unittest.TestSuite()
     suite.addTests(loader.loadTestsFromTestCase(TestRouteCard))
+    suite.addTests(loader.loadTestsFromTestCase(TestRoutingCorpus))
+    suite.addTests(loader.loadTestsFromTestCase(TestSynonyms))
+    suite.addTests(loader.loadTestsFromTestCase(TestGoldenSnapshot))
+    suite.addTests(loader.loadTestsFromTestCase(TestDifferentialRouteCard))
     suite.addTests(loader.loadTestsFromTestCase(TestShardWriteAndIndexUpdate))
     suite.addTests(loader.loadTestsFromTestCase(TestFileRouteProposal))
     suite.addTests(loader.loadTestsFromTestCase(TestGenerateRouteCandidates))

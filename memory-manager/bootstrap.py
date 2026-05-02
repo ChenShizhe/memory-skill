@@ -236,85 +236,235 @@ GRADUATED_PROJECTS: set[str] = {
 }
 
 
-def route_card(frontmatter: dict) -> str:
-    """Return the target shard filename (e.g. ``core-identity.md``).
+# ---------------------------------------------------------------------------
+# Tag synonym normalization
+# ---------------------------------------------------------------------------
+#
+# SYNONYMS maps surface-form tags that have appeared in real cards to canonical
+# tags that the routing rules already recognize. Pattern: Rasa entity-synonyms /
+# SpamAssassin / Hugo taxonomy. Applied via `normalize_tags()` before rule
+# evaluation, so the rule bodies stay narrow and new vocabulary misses become
+# one-line dict additions instead of edits across multiple rule blocks.
+#
+# Original tags are preserved on the card; this map only extends the rule-match
+# set. Each entry includes the date added and the motivating slug so the file
+# is self-documenting.
+SYNONYMS: dict[str, str] = {
+    # 2026-05-01 — review-* hyphenated variants surfaced by misc drain
+    # (anchor-string-verification-for-review-comments,
+    # non-lead-author-manuscript-comment-style, review-voice-constructive-by-default,
+    # review-writing-workflow-patterns, bibtex-per-field-verification-from-canonical-source).
+    # All review-* variants canonicalize to `review` (writing-style topic) since
+    # the source cards are about review-comment/manuscript-comment style, not
+    # paper-reading workflow. paper-review specifically: the misc-drain cards
+    # tagged paper-review (e.g. anchor-string-verification-for-review-comments,
+    # non-lead-author-manuscript-comment-style) are about writing review
+    # comments on a paper, not about reading papers.
+    "academic-review": "review",
+    "manuscript-review": "manuscript",
+    "paper-review": "review",
+    "review-style": "review",
+    "review-writing": "review",
+    "writing-voice": "writing",
+}
 
-    Implements the routing ladder documented in memory-manager/SKILL.md
-    (Shard Routing section). First-match-wins.
+
+def normalize_tags(tags) -> set[str]:
+    """Return a lowercase tag set extended via the SYNONYMS map.
+
+    Pure function. Input may be a list, a single string, or already a set.
+    Output is the union of (a) original lowercased tags and (b) canonical
+    forms produced by looking each tag up in SYNONYMS. Original tags are
+    always preserved so rules that match them directly still fire.
+    """
+    if isinstance(tags, (list, tuple, set)):
+        base = {str(t).strip().lower() for t in tags if str(t).strip()}
+    elif isinstance(tags, str):
+        base = {tags.strip().lower()} if tags.strip() else set()
+    else:
+        base = set()
+    extensions = {SYNONYMS[t] for t in base if t in SYNONYMS}
+    return base | extensions
+
+
+def route_card_with_index(frontmatter: dict) -> tuple[str, int]:
+    """Return ``(shard_filename, rule_index)`` for the given frontmatter.
+
+    Same routing ladder as :func:`route_card`; the index identifies which
+    rule fired (1-based, matching the comment-numbered rules below). Used by
+    the test suite to assert both the destination shard and the firing rule
+    in a single check, which makes precedence executable rather than merely
+    documented (DroolsAssert / DMN ``Unique`` hit-policy pattern).
     """
     path = str(frontmatter.get("path", "")).strip()
     type_ = str(frontmatter.get("type", "")).strip()
     slug = str(frontmatter.get("slug", "")).strip()
     projects = _as_list(frontmatter.get("projects"))
-    topics = _as_list(frontmatter.get("topics"))
-    topics_l = {t.lower() for t in topics}
+    topics_l = normalize_tags(frontmatter.get("topics"))
+
+    # === Block 1: Identity, type, and project rules (most specific) ===
 
     # 1. Core identity paths
     if path in CORE_IDENTITY_PATHS:
-        return "core-identity.md"
+        return ("core-identity.md", 1)
     # 2. workflow_template
     if type_ == "workflow_template":
-        return "workflow-templates.md"
+        return ("workflow-templates.md", 2)
     # 3. role_profile
     if type_ == "role_profile":
-        return "roles.md"
+        return ("roles.md", 3)
     # 4. hub
     if type_ == "hub":
-        return "hubs.md"
+        return ("hubs.md", 4)
     # 5. sole graduated project
     if len(projects) == 1 and projects[0] in GRADUATED_PROJECTS:
-        return f"project-{projects[0]}.md"
+        return (f"project-{projects[0]}.md", 5)
     # 6. sole below-threshold project
     if len(projects) == 1:
-        return "project-continuity.md"
-    # 7. paper-reading
+        return ("project-continuity.md", 6)
+
+    # === Block 2a: Slug-prefix matches (most specific by-name routing) ===
+    #
+    # Slug starting with a domain-specific prefix is a strong by-name claim.
+    # Routing by prefix runs before any topic-based rule so that, e.g.,
+    # `ralph-testing-patterns` (slug ralph-) lands in skill-ops even if its
+    # topics also include words that other topical rules now match.
+
+    # 7. paper-reading slug-prefix
     if (slug.startswith("paper-reader-") or slug.startswith("paper-discovery-")
             or slug.startswith("paper-review-")):
-        return "paper-reading.md"
-    if "paper-reading" in topics_l or "paper-reader" in topics_l:
-        return "paper-reading.md"
-    # 8. memory-system
+        return ("paper-reading.md", 7)
+    # 8. memory-system slug-prefix
     if (slug.startswith("memory-") or slug.startswith("catalog-")
             or slug.startswith("experience-logger-")
             or slug.startswith("knowledge-maester-")):
-        return "memory-system.md"
-    if "memory-ingestion" in topics_l or "retrieval" in topics_l or "catalog" in topics_l:
-        return "memory-system.md"
-    # 9. market-ops
+        return ("memory-system.md", 8)
+    # 9. market-ops slug-prefix
     if slug.startswith("market-") or slug.startswith("portfolio-"):
-        return "market-ops.md"
-    if "market-watcher" in topics_l or "portfolio" in topics_l or "ticker" in topics_l:
-        return "market-ops.md"
-    # 10. tooling-ops
-    if "credential" in slug or "broker" in slug or "git-" in slug:
-        return "tooling-ops.md"
-    if ("credential-broker" in topics_l or "env-vars" in topics_l
-            or "secret-handling" in topics_l or "git" in topics_l):
-        return "tooling-ops.md"
-    # 11. session-ops
-    if "research-meeting-" in slug or "session-" in slug:
-        return "session-ops.md"
-    if "research-meeting" in topics_l or "session-handoff" in topics_l:
-        return "session-ops.md"
-    # 12. skill-ops
+        return ("market-ops.md", 9)
+    # 13. skill-ops slug-prefix
     if slug.startswith("ralph-") or slug.startswith("skill-"):
-        return "skill-ops.md"
-    if ("skill-design" in topics_l or "skill-testing" in topics_l
-            or "skill-onboarding" in topics_l or "strangler-fig" in topics_l):
-        return "skill-ops.md"
-    # 13. agent-ops
-    if ("agent-ops" in topics_l or "preflight" in topics_l
-            or "paper-trail" in topics_l or "safety" in topics_l):
-        return "agent-ops.md"
-    # 14. writing-style
-    writing_topics = {"writing", "manuscript", "review", "academic-writing"}
-    has_writing_topic = bool(topics_l & writing_topics)
-    if has_writing_topic:
-        return "writing-style.md"
-    if type_ in {"user_preference", "user-preference"} and has_writing_topic:
-        return "writing-style.md"
+        return ("skill-ops.md", 13)
+
+    # === Block 2b: Structural matches (path / project-prefix) ===
+    #
+    # Path or project-prefix matches are nearly as specific as slug-prefix
+    # but apply to fewer rules. Run after slug-prefix and before any topical
+    # match.
+
+    # 8. memory-system path
+    if path == "memories/manager-ledger.md":
+        return ("memory-system.md", 8)
+    # 8. memory-system project-prefix
+    if any(p.startswith("memory-manager") for p in projects):
+        return ("memory-system.md", 8)
+    # 9. market-ops project-prefix (US-Iran*)
+    if any(p.lower().startswith("us-iran") for p in projects):
+        return ("market-ops.md", 9)
+
+    # === Block 2c: Topical matches and slug-substring matches ===
+    #
+    # Topic-based rules and looser slug-substring matches. Order within
+    # this block matters: writing-style precedes session-ops (writing
+    # patterns belong with writing patterns even when about workflow
+    # documents). Substring slug matches (e.g. ``"session-" in slug``)
+    # live here, not in Block 2a, because substring is less specific than
+    # prefix and is correctly beaten by an earlier writing-topic match.
+
+    # 7. paper-reading topics
+    if topics_l & {"paper-reading", "paper-reader",
+                   "reading-strategy", "industry-reports"}:
+        return ("paper-reading.md", 7)
+    # 8. memory-system topics
+    if topics_l & {"memory-ingestion", "retrieval", "catalog",
+                   "memory-manager", "operations", "ingestion-ledger"}:
+        return ("memory-system.md", 8)
+    # 9. market-ops topics
+    if topics_l & {"market-watcher", "portfolio", "ticker",
+                   "provider-orchestration", "report-validation",
+                   "evidence-synthesis", "geopolitics", "market-risk", "us-iran"}:
+        return ("market-ops.md", 9)
+    # 10. tooling-ops slug-substring
+    if "credential" in slug or "broker" in slug or "git-" in slug:
+        return ("tooling-ops.md", 10)
+    # 10. tooling-ops topics
+    if topics_l & {"credential-broker", "env-vars", "secret-handling", "git",
+                   "obsidian", "knowledge-graph", "vault-operations",
+                   "model-routing", "provider-selection", "capability-map",
+                   "pandoc", "latex", "mathjax",
+                   "deliverable-tooling", "reproducibility"}:
+        return ("tooling-ops.md", 10)
+    # 11. writing-style topics (precedes session-ops by design)
+    writing_topics = {"writing", "manuscript", "review", "academic-writing",
+                      "documentation-design", "deliverable-design", "user-facing",
+                      "citations", "bibtex", "reference-management"}
+    if topics_l & writing_topics:
+        return ("writing-style.md", 11)
+    # 12. session-ops slug-substring
+    if "research-meeting-" in slug or "session-" in slug:
+        return ("session-ops.md", 12)
+    # 12. session-ops topics
+    if topics_l & {"research-meeting", "session-handoff",
+                   "decision-making", "rule-enforcement", "evaluation",
+                   "documentation-pattern", "subagent-delegation",
+                   "verification", "research-process",
+                   "planning", "workflow-governance",
+                   "project-kickoff", "personal-productivity"}:
+        return ("session-ops.md", 12)
+    # 13. skill-ops topics
+    if topics_l & {"skill-design", "skill-testing", "skill-onboarding",
+                   "strangler-fig",
+                   "agent-architecture", "modularity", "resilience"}:
+        return ("skill-ops.md", 13)
+    # 14. agent-ops topics
+    if topics_l & {"agent-ops", "preflight", "paper-trail", "safety"}:
+        return ("agent-ops.md", 14)
+
+    # === Block 3: Fallback ===
+
     # 15. misc
-    return "misc.md"
+    return ("misc.md", 15)
+
+
+def route_card(frontmatter: dict) -> str:
+    """Return the target shard filename (e.g. ``core-identity.md``).
+
+    Implements the routing ladder documented in memory-manager/SKILL.md
+    (Shard Routing section). First-match-wins.
+
+    Precedence policy (source-order, three tiers, the second tier split
+    into three sub-blocks by specificity):
+
+    1. **Identity, type, and project rules — most specific.** Run first so
+       that core-identity files, special card types (workflow_template,
+       role_profile, hub), and sole-project routing claim their cards before
+       any topical rule sees them.
+    2a. **Slug-prefix matches.** A slug starting with `paper-reader-`,
+       `memory-`, `market-`, `ralph-`, etc. is a strong by-name claim.
+       Routes the card before any topic rule sees it, so e.g.
+       ``ralph-testing-patterns`` lands in skill-ops even when its topics
+       also overlap session-ops.
+    2b. **Structural matches.** Path equality and project-name prefix
+       checks. Specific but narrower than slug-prefix.
+    2c. **Topical matches and slug-substring matches.** Topic-based rules
+       and looser slug-substring matches (e.g. ``"session-" in slug``).
+       Order within this block matters: writing-style precedes session-ops
+       (writing patterns belong with writing patterns even when about
+       workflow documents).
+    3. **Fallback.** No safety-net rule. Cards that no topical rule claims
+       fall through to misc; the manager files a ROUTE-* proposal so the
+       miss is visible.
+
+    Tag matching uses :func:`normalize_tags` so hyphenated synonyms (e.g.
+    ``manuscript-review`` → ``manuscript``) extend the rule-match set
+    without requiring per-rule synonym lists.
+
+    The ladder body lives in :func:`route_card_with_index`; this function
+    is a thin wrapper that drops the rule-index field for callers that want
+    just the shard name.
+    """
+    shard, _index = route_card_with_index(frontmatter)
+    return shard
 
 
 # ---------------------------------------------------------------------------
