@@ -45,6 +45,7 @@ Logical input fields:
 - `quota_allocation_mode`
 - `project_root`
 - `query`
+- `previously_loaded`
 - `session_phase`
 - `caller_type`
 - `fresh_session`
@@ -56,7 +57,8 @@ Defaults:
 - `trace_required`: `true` for project tasks
 - `quota_allocation_mode`: `auto_if_relevant`
 - `project_root`: not set (uses default path resolution)
-- `query`: not set (full retrieval mode; when set, switches to mid-session recall)
+- `query`: not set (full retrieval mode; when set, switches to mid-session recall). Accepts either a single string (single-query recall) or a list of 2–4 strings (hybrid sub-queries — see Mid-Session Recall → Hybrid sub-queries).
+- `previously_loaded`: not set (no read-dedup applied). When set, a list of source paths the caller has already loaded earlier in the session — see Mid-Session Recall → Session-level read dedup.
 - `session_phase`: not set (inferred from other inputs; see Session Phase)
 - `caller_type`: `agent`
 - `fresh_session`: `false`
@@ -1304,6 +1306,36 @@ Rules for the inline block:
 - `query` is mutually exclusive with `retrieval_round_mode: follow_up`. If both are provided, `query` takes precedence and `follow_up_objective` is ignored.
 - `query` may be used with or without `active_project`. When `active_project` is set, `domain-prior.md` is included in the candidate sources for relevance scoring.
 - All other parameters (`force_tier`, `trace_required`, `quota_request`, `quota_allocation_mode`) are ignored during mid-session recall.
+
+### Hybrid sub-queries (list-valued `query`)
+
+The `query` parameter accepts either a single string (existing behavior) or a list of 2–4 strings (hybrid sub-queries). The list form supports callers — notably the `research-meeting` skill's named-trigger interface — that perform LLM-side query rewrite and want deterministic retrieval over each rewritten sub-query.
+
+Behavior when `query` is a list:
+
+1. Each sub-query runs through the catalog-shortlist + focused-read pipeline independently.
+2. Candidate memories are scored against each sub-query separately; the **maximum per-card score** across sub-queries is used as the final score.
+3. The shared 1,000-token budget applies to the merged result set, not to each sub-query individually.
+4. The output's `topic` field becomes the joined sub-queries, separated by ` | `: `<sub-query 1> | <sub-query 2> | ...`.
+5. Sub-queries are NOT recombined into a single LLM-generated string by the retriever — they are run as-is. Combination is the caller's responsibility before invocation.
+6. Citadel fallback (when activated) uses the same merged sub-query set.
+
+This pattern matches the convergent design across CrewAI's deep-search mode, Azure agentic retrieval, and Elasticsearch agentic search: query rewrite is LLM-side at the caller; retrieval over the rewritten queries is deterministic at the retriever.
+
+Backward compatibility: a single-string `query` continues to behave exactly as before.
+
+### Session-level read dedup (`previously_loaded` parameter)
+
+The optional `previously_loaded` parameter is a list of source paths the caller has already loaded earlier in the session. When provided, the retriever filters these out of the candidate pool **before scoring**, so they are not re-returned.
+
+- Format: list of strings. Each string is a source path matching either the `source` field of a memory card (e.g., `memories/long-term/<slug>.md`) or the file path of a vault note (e.g., `<vault_path>/literature/<note>.md`).
+- The dedup check is exact-match on the source path; no fuzzy or prefix matching.
+- If `previously_loaded` is empty or absent, no dedup is applied (existing behavior).
+- The retriever does not maintain its own session state. The caller is responsible for tracking which sources have been loaded and passing the cumulative list on each invocation.
+
+When all candidates are dedup'd out, return the existing "no relevant memory found" output shape with `sources: none`. The caller can then suppress its own surfacing announcement (in `research-meeting`, the `[memory: N entries on <topic>]` line is suppressed when N = 0 after dedup).
+
+`previously_loaded` is independent of citadel-fallback behavior: vault paths in the list are also dedup'd from vault search candidates.
 
 ## Failure Handling
 
