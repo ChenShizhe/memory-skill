@@ -165,6 +165,18 @@ If the session revealed a workflow pattern that should be added to or modify the
 
 If nothing notable, write `- none`.
 
+## Voice Input Pattern Promotion
+
+When the session involved voice input and the agent observed transcription cleanups, evaluate each cleanup at session close for promotion to the central-memory file `feedback_voice_input_patterns.md`. The promotion gate is **judgment-based with a harsh bias toward exclusion**:
+
+- **Promote** patterns that reflect the user's **speech style** — pronunciation quirks, disfluency artifacts, fillers — that hold across project domains. Heuristic: *"Would this pattern recur in a personal-assistant session about workouts as readily as in a research-meeting session about Hawkes processes?"*
+- **Do not promote** project-specific terminology (math labels like `L1` / `L2` / `\ell_1`, paper-bound author names, manuscript-bound jargon) even when mistranscribed. Those belong in the per-project `voice-glossary.yaml` or are discarded.
+- **When uncertain, do not promote.** The central file is loaded at every research-meeting and personal-assistant session; it must stay terse for the always-loaded cost to remain negligible.
+
+Each promoted entry in `feedback_voice_input_patterns.md` is one bullet, max two lines: `<transcribed-form>` → `<intended-form>` plus a one-line disambiguation cue. No verbose explanation per entry.
+
+Project-specific terms surfaced during the session belong in `<project_root>/voice-glossary.yaml`, written by the meeting agent during the session — not promoted by experience-logger.
+
 ## Quality Bar
 
 A good experience log:
